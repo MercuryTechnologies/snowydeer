@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+load("@buck2-haskell//:defs.bzl", "haskell_toolchain_library")
+load("@toolchains//:libs.bzl", "toolchain_libraries")
+
+[haskell_toolchain_library(
+    name = lib,
+    visibility = ["//..."],
+) for lib in toolchain_libraries]
+
+python_binary(
+    name = "toolchain_libs",
+    main = "toolchain_libs.py",
+)

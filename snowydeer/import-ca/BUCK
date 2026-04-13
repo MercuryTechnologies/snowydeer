@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+rust_binary(
+    name = "import-ca",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = ["//snowydeer:"],
+    deps = [
+        "//third_party/rust:clap",
+        "//third_party/rust:hex",
+        "//third_party/rust:hex_pp",
+        "//third_party/rust:miette",
+        "//third_party/rust:nix-remote",
+        "//third_party/rust:sha2",
+        "//third_party/rust:tracing",
+        "//third_party/rust:tracing-subscriber",
+    ],
+)

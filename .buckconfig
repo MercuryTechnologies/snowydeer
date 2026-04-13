@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[cells]
+root = .
+prelude = prelude
+buck2-haskell = buck2-haskell
+toolchains = toolchains
+nix = nix
+none = none
+
+[cell_aliases]
+config = prelude
+ovr_config = prelude
+fbcode = none
+fbsource = none
+fbcode_macros = none
+buck = none
+
+[external_cells]
+prelude = bundled
+
+[parser]
+# Use the default target platform in each cell. We have to set this explicitly
+# for each cell or (e.g.) `buck build toolchains//:python` will fail unless you
+# pass `--target-platforms` explicitly on the CLI. Very odd.
+#
+# Run `buck audit providers prelude//platforms:default` to see how this
+# resolves on your machine.
+#
+# The syntax is documented (only?) in the Buck2 source.
+# See: https://github.com/facebook/buck2/blob/48f4f3954912e210eaffded56e80ffc3ca2c9fc8/app/buck2_node/src/configuration/target_platform_detector.rs#L11-L25
+target_platform_detector_spec = \
+    target:root//...->prelude//platforms:default \
+    target:toolchains//...->prelude//platforms:default \
+    target:buck2-haskell//...->prelude//platforms:default \
+    target:nix//...->prelude//platforms:default
+
+[project]
+# See Note [File watching].
+ignore = .git, .jj, dist-newstyle, dist, .hiefiles, .hifiles, .devel-logs, .pc, .mypy_cache, .ruff_cache, ghcHEAD-toolchains, tmp, .direnv, target, ghcid.txt, hlint-out.json
+
+# Note [File watching]:
+# Ignores get applied AFTER watching: https://github.com/facebook/buck2/issues/465#issuecomment-1823086519
+#
+# Several of these are in .watchmanconfig as well; the ones with the highest
+# value of `find . -type d | wc -l` need to go in there, the rest aren't as
+# important.
+#
+# Due to macOS limitations, the first 6 in the watchmanconfig list are
+# apparently specially faster at ignoring so should be used for the largest
+# build directories.
+# https://facebook.github.io/watchman/docs/config#ignore_dirs
+#
+# After watchmanconfig ignores are processed, the events will go to buck2 which
+# *also* applies its own ignores. Without more research, it's unclear whether
+# things in watchmanconfig must be here, but there is no *deliberate*
+# propagation of the watchmanconfig to buck2 itself that I can find.
+# https://github.com/facebook/buck2/blob/c779e6f75b80779a4951f99774040a324ff32f2e/app/buck2_file_watcher/src/watchman/interface.rs#L114-L120
+
+[buck2]
+materializations = deferred
+hash_all_commands = true
+file_watcher = watchman
+
+[build]
+execution_platforms = prelude//platforms:default

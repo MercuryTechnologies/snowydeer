@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+filegroup(
+    name = "nix_overlays",
+    srcs = glob([
+        "**/flake.lock",
+        "**/*.nix",
+        "**/*.sh",
+        "**/*.patch",
+    ]),
+    visibility = ["PUBLIC"],
+)

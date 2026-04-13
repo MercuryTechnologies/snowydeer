@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+constraint_setting(
+    name = "link_style",
+    visibility = ["PUBLIC"],
+)
+
+constraint_value(
+    name = "static_pic",
+    constraint_setting = ":link_style",
+    visibility = ["PUBLIC"],
+)
+
+# N.B. This means static_pic in practice. We do not support non-PIC static
+# linking because it is at odds with modern security mitigations like ASLR.
+alias(
+    name = "static",
+    actual = ":static_pic",
+)
+
+constraint_value(
+    name = "shared",
+    constraint_setting = ":link_style",
+    visibility = ["PUBLIC"],
+)

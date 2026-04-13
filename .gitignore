@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# direnv
+.direnv/
+.envrc.local
+$.envrc.local
+
+# buck2
+buck-out/
+.buckconfig.local
+$.buckconfig.local
+prelude
+$prelude
+buck2-haskell
+$buck2-haskell

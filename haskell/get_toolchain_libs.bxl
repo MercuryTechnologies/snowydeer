@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+"""
+Collect all toolchain libraries from all haskell_library and haskell_binary targets.
+Used by //haskell:toolchain_libs.
+
+This could maybe be a buck uquery command directly, but we want to pre-aggregate these.
+There's some delicacy to this operation: we cannot actually cause buck to
+traverse into those deps as they may not exist yet, so we have to extract the
+raw deps attr.
+"""
+
+def _impl_toolchain_libs(ctx: bxl.Context):
+    hs_targets = ctx.uquery().kind("haskell_library|haskell_binary", "root//...")
+
+    toolchain_libs = {
+        dep.name: None
+        for target in hs_targets
+        for dep in target.attrs.deps.value()
+        if str(dep.path) == "root//haskell"
+    }
+
+    ctx.output.print(json.encode(toolchain_libs.keys()))
+
+libs = bxl_main(
+    impl = _impl_toolchain_libs,
+    cli_args = {},
+)

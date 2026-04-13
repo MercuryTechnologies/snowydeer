@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+constraint_setting(
+    name = "build_type",
+    visibility = ["PUBLIC"],
+)
+
+constraint_value(
+    name = "release",
+    constraint_setting = ":build_type",
+    visibility = ["PUBLIC"],
+)
+
+# Build with -O0. This is the default.
+constraint_value(
+    name = "debug",
+    constraint_setting = ":build_type",
+    visibility = ["PUBLIC"],
+)

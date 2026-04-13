@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+load(":package.bzl", "transition_to_static")
+
+python_binary(
+    name = "build_store_path_unwrapped",
+    main = "build_store_path.py",
+    typing = True,
+)
+
+command_alias(
+    name = "build_store_path",
+    args = [
+        "--ripgrep-exe=$(exe toolchains//:ripgrep)",
+        # FIXME(nixpkgs-upgrade): we can delete import-ca entirely once we have
+        # a newer nixpkgs, but we need a Lix 2.95 in our package set, which
+        # requires a newer nixpkgs. Excluding the import-ca-exe arg causes
+        # build_store_path to use the native Lix feature.
+        # @moss-disable[end= ]: "--import-ca-exe=$(exe //snowydeer/import-ca)",
+    ],
+    exe = ":build_store_path_unwrapped",
+)
+
+transition_to_static(
+    name = "transition_to_static",
+)

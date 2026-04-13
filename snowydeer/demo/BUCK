@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+"""
+Demo targets for Snowydeer
+"""
+
+load("//haskell:mercury_haskell.bzl", "mercury_haskell_binary")
+load("//snowydeer:container.bzl", "snowydeer_container")
+load("//snowydeer:package.bzl", "snowydeer_package")
+
+mercury_haskell_binary(
+    name = "hello",
+    srcs = ["Hello.hs"],
+    main = "Hello",
+    deps = [
+        "//haskell:base",
+    ],
+)
+
+snowydeer_package(
+    name = "hello_pkg",
+    binaries = [
+        ":hello",
+    ],
+)
+
+# This is a wrapper for
+# https://nixos.org/manual/nixpkgs/stable/#ssec-pkgs-dockerTools-streamLayeredImage-inputs
+snowydeer_container(
+    name = "hello_container",
+    # No way to do store path references here; need to be put in place as
+    # absolute paths using `content`.
+    #
+    # This command is what will be run inside tini.
+    cmd = ["/bin/hello"],
+
+    # contents= in Nix docker tools; will be symlinked into the root of the container.
+    # This is a set of paths in addition to `main_contents`.
+    contents = [
+        # Snowydeer package dependencies
+        ":hello_pkg",
+        # Nix dependencies are allowed too!
+        "toolchains//:ripgrep",
+    ],
+
+    # Required. Description of the image.
+    description = "Hello world, in a container",
+
+    # Optional. No store paths supported in here either.
+    env = {"FOOBAR": "blah"},
+
+    # These fast-changing paths are isolated into their own layers on top of
+    # the image. We recommend putting the main application targets in the image
+    # into here.
+    #
+    # Other paths will be intelligently layered into the image.
+    main_contents = [
+        ":hello_pkg",
+        "toolchains//:ripgrep",
+    ],
+
+    # Optional. Expose TCP port 2003.
+    ports = ["2003/tcp"],
+)

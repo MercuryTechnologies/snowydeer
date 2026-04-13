@@ -1,0 +1,189 @@
+diff -rupN a/utils/haddock/haddock-api/src/Haddock/Backends/Hyperlinker/Utils.hs b/utils/haddock/haddock-api/src/Haddock/Backends/Hyperlinker/Utils.hs
+--- a/utils/haddock/haddock-api/src/Haddock/Backends/Hyperlinker/Utils.hs	2026-01-20 21:12:32.463667923 +0000
++++ b/utils/haddock/haddock-api/src/Haddock/Backends/Hyperlinker/Utils.hs	2026-01-20 21:13:30.782931199 +0000
+@@ -124,15 +124,15 @@ recoverFullIfaceTypes df flattened ast =
+ 
+     -- Unfold an 'HieType' whose subterms have already been unfolded
+     go :: HieType IfaceType -> IfaceType
+-    go (HTyVarTy n) = IfaceTyVar (getOccFS n)
++    go (HTyVarTy n) = IfaceTyVar (mkIfLclName $ getOccFS n)
+     go (HAppTy a b) = IfaceAppTy a (hieToIfaceArgs b)
+     go (HLitTy l) = IfaceLitTy l
+-    go (HForAllTy ((n,k),af) t) = let b = (getOccFS n, k)
++    go (HForAllTy ((n,k),af) t) = let b = (mkIfLclName $ getOccFS n, k)
+                                   in IfaceForAllTy (Bndr (IfaceTvBndr b) af) t
+     go (HFunTy w a b)  = IfaceFunTy (visArg TypeLike)   w a b          -- t1 -> t2
+     go (HQualTy con b) = IfaceFunTy (invisArg TypeLike) many_ty con b  -- c => t
+     go (HCastTy a) = a
+-    go HCoercionTy = IfaceTyVar "<coercion type>"
++    go HCoercionTy = IfaceTyVar $ mkIfLclName "<coercion type>"
+     go (HTyConApp a xs) = IfaceTyConApp a (hieToIfaceArgs xs)
+ 
+     -- This isn't fully faithful - we can't produce the 'Inferred' case
+diff -rupN a/utils/haddock/haddock-api/src/Haddock/Interface/Create.hs b/utils/haddock/haddock-api/src/Haddock/Interface/Create.hs
+--- a/utils/haddock/haddock-api/src/Haddock/Interface/Create.hs	2026-01-20 21:12:32.465668001 +0000
++++ b/utils/haddock/haddock-api/src/Haddock/Interface/Create.hs	2026-01-20 21:13:30.782931199 +0000
+@@ -130,7 +130,7 @@ createInterface1 flags unit_state mod_su
+     -- from its OccName. See Note [default method Name] in GHC.Iface.Recomp
+     def_meths_env = mkOccEnv def_meths
+     def_meths = [ (nameOccName nm, nm)
+-                | (_, IfaceId { ifName = nm }) <- mi_decls mod_iface
++                | (IfaceDeclBoxed _ nm _ _) <- mi_decls mod_iface
+                 , let occ = nameOccName nm
+                 , isDefaultMethodOcc occ
+                 ]
+diff -rupN a/utils/haddock/haddock-api/src/Haddock/InterfaceFile.hs b/utils/haddock/haddock-api/src/Haddock/InterfaceFile.hs
+--- a/utils/haddock/haddock-api/src/Haddock/InterfaceFile.hs	2026-01-20 21:12:32.465668001 +0000
++++ b/utils/haddock/haddock-api/src/Haddock/InterfaceFile.hs	2026-01-20 21:13:30.782931199 +0000
+@@ -3,6 +3,7 @@
+ {-# LANGUAGE ScopedTypeVariables #-}
+ {-# LANGUAGE BangPatterns #-}
+ {-# LANGUAGE NamedFieldPuns #-}
++{-# LANGUAGE TypeApplications #-}
+ {-# OPTIONS_GHC -fno-warn-orphans #-}
+ -----------------------------------------------------------------------------
+ -- |
+@@ -29,6 +30,7 @@ module Haddock.InterfaceFile (
+ import Haddock.Types
+ 
+ import Data.IORef
++import Data.Function ((&))
+ import qualified Data.Map as Map
+ import Data.Map (Map)
+ import Data.Version
+@@ -45,6 +47,8 @@ import GHC.Types.Name.Cache
+ import GHC.Types.Unique.FM
+ import GHC.Types.Unique
+ 
++import GHC.Iface.Type (IfaceType, putIfaceType, getIfaceType)
++
+ import Haddock.Options (Visibility (..))
+ 
+ data InterfaceFile = InterfaceFile {
+@@ -146,13 +150,17 @@ writeInterfaceFile filename iface = do
+   put_ bh0 binaryInterfaceVersion
+ 
+   -- remember where the dictionary pointer will go
+-  dict_p_p <- tellBin bh0
++  dict_p_p <- tellBinWriter bh0
+   put_ bh0 dict_p_p
+ 
+   -- remember where the symbol table pointer will go
+-  symtab_p_p <- tellBin bh0
++  symtab_p_p <- tellBinWriter bh0
+   put_ bh0 symtab_p_p
+ 
++  -- remember where the iface type table pointer will go
++  ifacetype_p_p <- tellBinWriter bh0
++  put_ bh0 ifacetype_p_p
++
+   -- Make some intial state
+   symtab_next <- newFastMutInt 0
+   symtab_map <- newIORef emptyUFM
+@@ -165,16 +173,28 @@ writeInterfaceFile filename iface = do
+                       bin_dict_next = dict_next_ref,
+                       bin_dict_map  = dict_map_ref }
+ 
++  iface_type_dict <- initGenericSymbolTable @(Map IfaceType)
++
+   -- put the main thing
+-  let bh = setUserData bh0 $ newWriteState (putName bin_symtab)
+-                                           (putName bin_symtab)
+-                                           (putFastString bin_dict)
++  let bh = bh0
++            & addWriterToUserData (mkWriter $ putName bin_symtab)
++            & addWriterToUserData (simpleBindingNameWriter $ mkWriter $ putName bin_symtab)
++            & addWriterToUserData (mkWriter $ putFastString bin_dict)
++            & addWriterToUserData (mkWriter $ putGenericSymTab iface_type_dict)
+   putInterfaceFile_ bh iface
+ 
++  -- write the iface type pointer at the front of the file
++  ifacetype_p <- tellBinWriter bh
++  putAtRel bh ifacetype_p_p ifacetype_p
++  seekBinWriter bh ifacetype_p
++
++  -- write the symbol table itself
++  _ <- putGenericSymbolTable iface_type_dict putIfaceType bh
++
+   -- write the symtab pointer at the front of the file
+-  symtab_p <- tellBin bh
+-  putAt bh symtab_p_p symtab_p
+-  seekBin bh symtab_p
++  symtab_p <- tellBinWriter bh
++  putAtRel bh symtab_p_p symtab_p
++  seekBinWriter bh symtab_p
+ 
+   -- write the symbol table itself
+   symtab_next' <- readFastMutInt symtab_next
+@@ -182,9 +202,9 @@ writeInterfaceFile filename iface = do
+   putSymbolTable bh symtab_next' symtab_map'
+ 
+   -- write the dictionary pointer at the fornt of the file
+-  dict_p <- tellBin bh
+-  putAt bh dict_p_p dict_p
+-  seekBin bh dict_p
++  dict_p <- tellBinWriter bh
++  putAtRel bh dict_p_p dict_p
++  seekBinWriter bh dict_p
+ 
+   -- write the dictionary itself
+   dict_next <- readFastMutInt dict_next_ref
+@@ -226,7 +246,7 @@ readInterfaceFile name_cache filename by
+ -------------------------------------------------------------------------------
+ 
+ 
+-putName :: BinSymbolTable -> BinHandle -> Name -> IO ()
++putName :: BinSymbolTable -> WriteBinHandle -> Name -> IO ()
+ putName BinSymbolTable{
+             bin_symtab_map = symtab_map_ref,
+             bin_symtab_next = symtab_next }    bh name
+@@ -249,7 +269,7 @@ data BinSymbolTable = BinSymbolTable {
+   }
+ 
+ 
+-putFastString :: BinDictionary -> BinHandle -> FastString -> IO ()
++putFastString :: BinDictionary -> WriteBinHandle -> FastString -> IO ()
+ putFastString BinDictionary { bin_dict_next = j_r,
+                               bin_dict_map  = out_r}  bh f
+   = do
+@@ -304,7 +324,7 @@ instance Binary InterfaceFile where
+     return (InterfaceFile env info ifaces)
+ 
+ 
+-putInterfaceFile_ :: BinHandle -> InterfaceFile -> IO ()
++putInterfaceFile_ :: WriteBinHandle -> InterfaceFile -> IO ()
+ putInterfaceFile_ bh (InterfaceFile env info ifaces) = do
+   put_ bh env
+   put_ bh info
+diff -rupN a/utils/haddock/haddock-api/src/Haddock/Interface.hs b/utils/haddock/haddock-api/src/Haddock/Interface.hs
+--- a/utils/haddock/haddock-api/src/Haddock/Interface.hs	2026-01-20 21:12:32.464667962 +0000
++++ b/utils/haddock/haddock-api/src/Haddock/Interface.hs	2026-01-20 21:13:30.782931199 +0000
+@@ -3,6 +3,7 @@
+ {-# LANGUAGE BangPatterns      #-}
+ {-# LANGUAGE NamedFieldPuns    #-}
+ {-# LANGUAGE TupleSections     #-}
++{-# LANGUAGE LambdaCase        #-}
+ -----------------------------------------------------------------------------
+ -- |
+ -- Module      :  Haddock.Interface
+@@ -76,6 +77,7 @@ import GHC.Utils.Error (withTiming)
+ import GHC.Unit.Home.ModInfo
+ import GHC.Tc.Utils.Env (lookupGlobal_maybe)
+ import GHC.Utils.Outputable (Outputable)
++import GHC.Unit.Home.PackageTable
+ 
+ #if defined(mingw32_HOST_OS)
+ import System.IO
+@@ -241,9 +243,10 @@ processModule verbosity modSummary flags
+ 
+   hsc_env <- getSession
+   dflags <- getDynFlags
+-  let hmi = case lookupHpt (hsc_HPT hsc_env) (moduleName $ ms_mod modSummary) of
++  hmi <- liftIO (lookupHptByModule (hsc_HPT hsc_env) (ms_mod modSummary)) >>= \case
+         Nothing -> error "processModule: All modules should be loaded into the HPT by this point"
+-        Just x -> x
++        Just x -> pure x
++  let
+       mod_iface = hm_iface hmi
+       unit_state = hsc_units hsc_env
+ 

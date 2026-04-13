@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+load("//haskell:mercury_haskell.bzl", "mercury_haskell_library")
+
+mercury_haskell_library(
+    name = "a-mercury-prelude",
+    srcs = glob(["src/**/*.hs"]),
+    extra_compiler_flags = [
+        "-D__OSS__",  # @moss-enable
+    ],
+    visibility = ["PUBLIC"],
+    deps = [
+        "//haskell:QuickCheck",
+        "//haskell:aeson-typescript",
+        "//haskell:annotated-exception",
+        "//haskell:async",
+        "//haskell:base",
+        # @moss-disable[end= ]: "//haskell:bugsnag-haskell",
+        "//haskell:classy-prelude",
+        "//haskell:clock",
+        "//haskell:constraints",
+        "//haskell:exceptions",
+        "//haskell:extra",
+        "//haskell:hs-opentelemetry-api",
+        "//haskell:hspec-yesod",
+        "//haskell:monad-logger",
+        "//haskell:mtl",
+        "//haskell:require-callstack",
+        "//haskell:resourcet",
+        "//haskell:safe-exceptions",
+        # @moss-disable[end= ]: "//haskell:temporal-sdk",
+        "//haskell:time",
+        "//haskell:transformers",
+        "//haskell:unliftio",
+    ],
+)

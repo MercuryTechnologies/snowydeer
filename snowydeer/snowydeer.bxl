@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+"""
+Tool for importing Buck2 artifacts into a Nix store as store paths with the
+correct Nix-level dependencies.
+"""
+
+load("@toolchains//nix/nix_build.bzl", "NixDepsTsetProvider", "NixDynamicDepsTset", "NixDynamicInfo", "NixPathInfo")
+
+def _dump_nix_paths_dynamic_impl(
+        bxl_ctx: bxl.Context,
+        list_of_packages: OutputArtifact,
+        dyn_nix_paths: list[ResolvedDynamicValue]) -> list[Provider]:
+    actions = bxl_ctx.bxl_actions().actions
+
+    paths = []
+    all_tsets = []
+    for item in dyn_nix_paths:
+        providers = item.providers
+        if NixDepsTsetProvider in providers:
+            all_tsets.append(providers[NixDepsTsetProvider].deps)
+        if NixPathInfo in providers:
+            paths.append(providers[NixPathInfo].path)
+
+    # Can't do this more correct design because of https://github.com/facebook/buck2/issues/683
+    # every_package = actions.tset(NixDepsTset, children = all_tsets)
+    # We will probably just have some duplicates. It's fine, we will eat them
+    # in the Python script.
+    json = {
+        "paths_old": paths,
+        "paths_new": [tset.project_as_json("all_output_paths") for tset in all_tsets],
+    }
+
+    actions.write_json(list_of_packages, json)
+
+    return []
+
+_dump_nix_paths_dynamic = bxl.dynamic_actions(
+    impl = _dump_nix_paths_dynamic_impl,
+    attrs = {
+        "list_of_packages": dynattrs.output(),
+        "dyn_nix_paths": dynattrs.list(dynattrs.dynamic_value()),
+    },
+)
+
+def _import_store_path(ctx: bxl.Context, bxl_actions: bxl.Actions, cquery: bxl.CqueryContext, build_store_path: ProvidersLabel, configured_target) -> bxl.EnsuredArtifact:
+    """Import a configured target into the Nix store.
+
+    Args:
+        configured_target: A configured target (not unconfigured TargetLabel)
+    """
+    sanitized_name = str(configured_target.label.raw_target()).replace("/", "_").replace(":", "_")
+    actions = bxl_actions.actions
+    list_of_paths = actions.declare_output("all_nix_paths_{}.json".format(sanitized_name))
+
+    deps = cquery.deps(configured_target)
+    deps_analysis = ctx.analysis(deps)
+    target_analysis = ctx.analysis(configured_target)
+
+    default_info = target_analysis.providers()[DefaultInfo]
+
+    all_dynamics = []
+    for (_which, dep) in deps_analysis.items():
+        providers = dep.providers()
+        if NixDynamicInfo in providers:
+            all_dynamics.append(providers[NixDynamicInfo].dynamic)
+        if NixDynamicDepsTset in providers:
+            all_dynamics.append(providers[NixDynamicDepsTset].dynamic)
+
+    actions.dynamic_output_new(_dump_nix_paths_dynamic(
+        dyn_nix_paths = all_dynamics,
+        list_of_packages = list_of_paths.as_output(),
+    ))
+
+    # This is expected to be a //snowydeer:package.bzl target; we currently
+    # don't have ways for other targets to request that they add things to the
+    # package target, but such functionality is basically only required for
+    # shared libs (which we're not using) and should be implemented in
+    # package.bzl.
+    out = actions.declare_output("store_path_{}".format(sanitized_name))
+    actions.run(
+        cmd_args(
+            bxl_actions.exec_deps[build_store_path][RunInfo],
+            "--artifact",
+            default_info.default_outputs[0],
+            "--paths-json",
+            list_of_paths,
+            # FIXME(jadel): configurability of names?
+            "--name",
+            configured_target.label.name,
+            "--write-path-to",
+            out.as_output(),
+        ),
+        category = "snowydeer_import",
+        identifier = str(configured_target.label),
+        local_only = True,
+    )
+    return ctx.output.ensure(out)
+
+def _collect_nix_deps(ctx: bxl.Context):
+    # Use cquery without explicit platform - will use configured targets from CLI
+    cquery = ctx.cquery()
+
+    build_store_path = ctx.unconfigured_sub_targets("//snowydeer:build_store_path")
+
+    # target_platform here is for resolving exec_deps and toolchains, not the build targets
+    bxl_actions = ctx.bxl_actions(
+        exec_deps = [build_store_path],
+        toolchains = ["toolchains//:rust", "toolchains//:python"],
+        target_platform = "prelude//platforms:default",
+    )
+
+    # Use target_universe with ctx.modifiers to respect CLI modifiers (-m release)
+    # Without passing modifiers, target_universe uses empty modifiers by default
+    configured_targets = ctx.target_universe(ctx.cli_args.target, modifiers = ctx.modifiers).target_set()
+    for configured_target in configured_targets:
+        result = _import_store_path(ctx = ctx, bxl_actions = bxl_actions, cquery = cquery, build_store_path = build_store_path, configured_target = configured_target)
+        ctx.output.print(result)
+
+main = bxl.main(
+    impl = _collect_nix_deps,
+    cli_args = {
+        # target_expr already handles multiple targets, returns list of TargetLabel
+        "target": bxl.cli_args.target_expr("Target(s) to build and import"),
+    },
+    doc = """
+        Extracts the direct/buck2-transitive Nix dependency list of a buck2 target into a messy json file.
+    """,
+)

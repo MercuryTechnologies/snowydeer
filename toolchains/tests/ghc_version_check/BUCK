@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+load("@toolchains//tests/ghc_version_check:defs.bzl", "ghc_version_check_test")
+
+ghc_version_check_test(
+    name = "ghc_version_check",
+)

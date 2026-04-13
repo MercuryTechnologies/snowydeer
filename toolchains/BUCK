@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+load("@prelude//tests:test_toolchain.bzl", "noop_test_toolchain")
+load("@prelude//toolchains:remote_test_execution.bzl", "remote_test_execution_toolchain")
+load("@toolchains//nix:default_toolchains.bzl", "default_flake_attrs", "default_nix_toolchains", "exec_compatible_with")
+load("@toolchains//nix:nix_build.bzl", "nix_build")
+load("@toolchains//nix:nix_haskell_toolchain.bzl", "nix_haskell_toolchain")
+
+# Define cxx, rust, bash, and python toolchains
+default_nix_toolchains()
+
+default_flake_attrs()
+
+remote_test_execution_toolchain(
+    name = "remote_test_execution",
+    default_profile = read_root_config("test", "re_profile", "local"),
+    profiles = {
+        "local": {
+            "capabilities": {},
+            "dependencies": [],
+            "listing_capabilities": {},
+            "local_enabled": True,
+            "remote_cache_enabled": False,
+            "use_case": "default-buck2",
+        },
+    },
+    visibility = ["PUBLIC"],
+)
+
+export_file(
+    name = "ghci_script_template",
+    src = "ghci_script.tpl",
+    visibility = ["PUBLIC"],
+)
+
+export_file(
+    name = "ghci_iserv_template",
+    src = "ghci_iserv.tpl",
+    visibility = ["PUBLIC"],
+)
+
+nix_haskell_toolchain(
+    name = "haskell",
+    compiler_flags = [
+        "-fwrite-ide-info",
+    ],
+    exec_compatible_with = exec_compatible_with,
+    flake = "@nix//:nix_overlays",
+    visibility = ["PUBLIC"],
+)
+
+nix_build(
+    name = "ghc",
+    binaries = [
+        "ghc-pkg",
+        "haddock",
+    ],
+    binary = "ghc",
+    flake = "@nix//:nix_overlays",
+)
+
+nix_build(
+    name = "hspec-discover",
+    binary = "hspec-discover",
+    flake = "@nix//:nix_overlays",
+    visibility = ["PUBLIC"],
+)
+
+noop_test_toolchain(
+    name = "test",
+    visibility = ["PUBLIC"],
+)
+
+nix_build(
+    name = "ripgrep",
+    binary = "rg",
+    flake = "@nix//:nix_overlays",
+    visibility = ["PUBLIC"],
+)
+
+nix_build(
+    name = "skopeo",
+    binary = "skopeo",
+    flake = "@nix//:nix_overlays",
+    visibility = ["PUBLIC"],
+)
