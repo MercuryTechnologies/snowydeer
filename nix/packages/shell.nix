@@ -5,11 +5,13 @@
 {
   mkShell,
   buck2-source,
+  nix,
 }:
 mkShell {
   nativeBuildInputs = [
     # keep-sorted start
     buck2-source
+    nix
     # keep-sorted end
   ];
 }
