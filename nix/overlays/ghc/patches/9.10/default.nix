@@ -370,13 +370,32 @@ final: [
   # Avoid expensive computation for debug logging in `mergeDatabases` when log level is low
   # In HEAD: Not yet but approved.
   (final.fetchpatch {
-    #wavewave/20260227-mergeDatabase-fix
     url = "https://github.com/MercuryTechnologies/ghc/commit/8f61a41625dfa6d6617754b1ba3f8e787c96b6fc.diff";
     hash = "sha256-gy8PWutrBhe3Agcz7K/+DGEl6CvLpmzmmyD1jb9vnx8=";
+    excludes = [ "testsuite/**" ];
+  })
+
+  # enableCodeGenForTh only when codegen is on for MkDepend mode
+  # In HEAD: Not yet.
+  (final.fetchpatch {
+    url = "https://github.com/MercuryTechnologies/ghc/commit/6ad23abc831eccb62b29e8d9b6233667036e34a9.diff";
+    hash = "sha256-RvgH/yxp8HTMKtx/0brDFBhBHXYSScW0w0pRzMEuQPM=";
     excludes = [ "testsuite/**" ];
   })
 
   ./haddock-ghc9101-mem-improv-backport.patch
 
   ./haddock-ghc9101-det-iface-re-export.patch
+
+  # The following 4 patches went into 9.12 in
+  # https://gitlab.haskell.org/ghc/ghc/-/merge_requests/12707
+
+  ./haddock-ghc9101-support-for-one-shot.patch
+
+  ./haddock-ghc9101-merge-package-interfaces-when-generating-contents.patch
+
+  ./haddock-ghc9101-do-not-load-in-attachInstances-in-one-shot-mode.patch
+
+  ./haddock-ghc9101-dynFlags-with-extensions-set-in-source.patch
+
 ]

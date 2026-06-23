@@ -1,0 +1,334 @@
+From f040b69424e1024155cc8999ee050165e8f8ae24 Mon Sep 17 00:00:00 2001
+From: Sjoerd Visscher <sjoerd.visscher@tweag.io>
+Date: Wed, 17 Apr 2024 14:09:14 +0200
+Subject: [PATCH] Add support for incremental/one-shot haddock
+
+---
+ haddock-api/src/Haddock.hs                    |  6 +-
+ .../src/Haddock/Backends/Hyperlinker.hs       | 13 ++-
+ haddock-api/src/Haddock/Interface.hs          | 91 +++++++++++++++++--
+ haddock-api/src/Haddock/Interface/Create.hs   | 23 ++++-
+ haddock-api/src/Haddock/Options.hs            | 23 +++++
+ 5 files changed, 138 insertions(+), 18 deletions(-)
+
+diff --git a/utils/haddock/haddock-api/src/Haddock.hs b/utils/haddock/haddock-api/src/Haddock.hs
+index d31c113c31..3addda803d 100644
+--- a/utils/haddock/haddock-api/src/Haddock.hs
++++ b/utils/haddock/haddock-api/src/Haddock.hs
+@@ -213,7 +213,7 @@ haddockWithGhc ghc args = handleTopExceptions $ do
+         putMsg logger $ renderJson (jsonInterfaceFile ifaceFile)
+ 
+     -- If we were given source files to generate documentation from, do it
+-    if not (null files) then do
++    if not (null files) || isJust (optOneShot flags) then do
+       (packages, ifaces, homeLinks) <- readPackagesAndProcessModules flags files
+       let packageInfo = PackageInfo { piPackageName =
+                                         fromMaybe (PackageName mempty) (optPackageName flags)
+@@ -493,7 +493,7 @@ render log' dflags unit_state flags sinceQual qual ifaces packages extSrcMap = d
+                   opt_contents_url opt_index_url unicode sincePkg packageInfo
+                   qual pretty withQuickjump
+       return ()
+-    unless withBaseURL $ do
++    unless (withBaseURL || isJust (optOneShot flags)) $ do
+       copyHtmlBits odir libDir themes withQuickjump
+       writeHaddockMeta odir withQuickjump
+ 
+@@ -530,7 +530,7 @@ render log' dflags unit_state flags sinceQual qual ifaces packages extSrcMap = d
+   when (Flag_HyperlinkedSource `elem` flags && not (null ifaces)) $ do
+     withTiming logger "ppHyperlinkedSource" (const ()) $ do
+       _ <- {-# SCC ppHyperlinkedSource #-}
+-           ppHyperlinkedSource (verbosity flags) odir libDir opt_source_css pretty srcMap ifaces
++           ppHyperlinkedSource (verbosity flags) (isJust (optOneShot flags)) odir libDir opt_source_css pretty srcMap ifaces
+       return ()
+ 
+ 
+diff --git a/utils/haddock/haddock-api/src/Haddock/Backends/Hyperlinker.hs b/utils/haddock/haddock-api/src/Haddock/Backends/Hyperlinker.hs
+index 84ccaf60e2..57a8ef2e86 100644
+--- a/utils/haddock/haddock-api/src/Haddock/Backends/Hyperlinker.hs
++++ b/utils/haddock/haddock-api/src/Haddock/Backends/Hyperlinker.hs
+@@ -17,6 +17,7 @@ import Haddock.Backends.Hyperlinker.Types
+ import Haddock.Backends.Hyperlinker.Utils
+ import Haddock.Backends.Xhtml.Utils ( renderToString )
+ 
++import Control.Monad (unless)
+ import Data.Maybe
+ import System.Directory
+ import System.FilePath
+@@ -35,6 +36,7 @@ import GHC.Unit.Module         ( Module, moduleName )
+ -- when generating documentation. Otherwise this could lead to dead links in
+ -- produced source.
+ ppHyperlinkedSource :: Verbosity
++                    -> Bool -- ^ In one-shot mode
+                     -> FilePath -- ^ Output directory
+                     -> FilePath -- ^ Resource directory
+                     -> Maybe FilePath -- ^ Custom CSS file path
+@@ -42,12 +44,13 @@ ppHyperlinkedSource :: Verbosity
+                     -> M.Map Module SrcPath -- ^ Paths to sources
+                     -> [Interface] -- ^ Interfaces for which we create source
+                     -> IO ()
+-ppHyperlinkedSource verbosity outdir libdir mstyle pretty srcs' ifaces = do
++ppHyperlinkedSource verbosity isOneShot outdir libdir mstyle pretty srcs' ifaces = do
+     createDirectoryIfMissing True srcdir
+-    let cssFile = fromMaybe (defaultCssFile libdir) mstyle
+-    copyFile cssFile $ srcdir </> srcCssFile
+-    copyFile (libdir </> "html" </> highlightScript) $
+-        srcdir </> highlightScript
++    unless isOneShot $ do
++      let cssFile = fromMaybe (defaultCssFile libdir) mstyle
++      copyFile cssFile $ srcdir </> srcCssFile
++      copyFile (libdir </> "html" </> highlightScript) $
++          srcdir </> highlightScript
+     mapM_ (ppHyperlinkedModuleSource verbosity srcdir pretty srcs) ifaces
+   where
+     srcdir = outdir </> hypSrcDir
+diff --git a/utils/haddock/haddock-api/src/Haddock/Interface.hs b/utils/haddock/haddock-api/src/Haddock/Interface.hs
+index cd94add63c..49d80bfcda 100644
+--- a/utils/haddock/haddock-api/src/Haddock/Interface.hs
++++ b/utils/haddock/haddock-api/src/Haddock/Interface.hs
+@@ -39,7 +39,7 @@ module Haddock.Interface (
+ 
+ import Haddock.GhcUtils (moduleString, pretty)
+ import Haddock.Interface.AttachInstances (attachInstances)
+-import Haddock.Interface.Create (createInterface1)
++import Haddock.Interface.Create (createInterface1, createInterface1')
+ import Haddock.Interface.Rename (renameInterface)
+ import Haddock.InterfaceFile (InterfaceFile, ifInstalledIfaces, ifLinkEnv)
+ import Haddock.Options hiding (verbosity)
+@@ -47,6 +47,7 @@ import Haddock.Types
+ import Haddock.Utils (Verbosity (..), normal, out, verbose)
+ 
+ import Control.Monad
++import Data.Foldable (traverse_)
+ import Data.List (foldl', isPrefixOf)
+ import Data.Traversable (for)
+ import qualified Data.Map.Strict as Map
+@@ -66,16 +67,23 @@ import GHC.Driver.Main
+ import GHC.Core.InstEnv
+ import GHC.Driver.Session hiding (verbosity)
+ import GHC.HsToCore.Docs (getMainDeclBinder)
++import GHC.Iface.Binary (CheckHiWay(..), TraceBinIFace(..), readBinIface)
++import GHC.IfaceToCore (tcIfaceDecls, tcIfaceInst, tcIfaceFamInst)
++import GHC.Tc.Utils.Monad (IfG, initIfaceLoad, initIfaceLcl, updateEps_)
++import GHC.Tc.Utils.Env (lookupGlobal_maybe)
+ import GHC.Types.Error (mkUnknownDiagnostic)
+ import GHC.Types.Name.Occurrence (emptyOccEnv)
++import GHC.Types.Name.Env (extendNameEnvList)
++import GHC.Core.InstEnv (extendInstEnvList)
++import GHC.Core.FamInstEnv (extendFamInstEnvList)
++import GHC.Unit.External (ExternalPackageState (..))
++import GHC.Unit.Home.ModInfo
+ import GHC.Unit.Module.Graph (ModuleGraphNode (..))
+ import GHC.Unit.Module.ModDetails
++import GHC.Unit.Module.ModIface (mi_decls, mi_semantic_module, mi_boot, mi_insts, mi_fam_insts)
+ import GHC.Unit.Module.ModSummary (isBootSummary)
+-import GHC.Utils.Outputable ((<+>), pprModuleName)
++import GHC.Utils.Outputable (Outputable, (<+>), pprModuleName, text)
+ import GHC.Utils.Error (withTiming)
+-import GHC.Unit.Home.ModInfo
+-import GHC.Tc.Utils.Env (lookupGlobal_maybe)
+-import GHC.Utils.Outputable (Outputable)
+ import GHC.Unit.Home.PackageTable
+ 
+ #if defined(mingw32_HOST_OS)
+@@ -109,8 +117,12 @@ processModules verbosity modules flags extIfaces = do
+         | ext <- extIfaces
+         , iface <- ifInstalledIfaces ext
+         ]
++      oneShotHiFile = optOneShot flags
+ 
+-  interfaces <- createIfaces verbosity modules flags instIfaceMap
++  interfaces <- maybe
++    (createIfaces verbosity modules flags instIfaceMap)
++    (createOneShotIface verbosity flags instIfaceMap)
++    oneShotHiFile
+ 
+   let exportedNames =
+         Set.unions $ map (Set.fromList . ifaceExports) $
+@@ -313,6 +325,73 @@ processModule verbosity modSummary flags ifaceMap instIfaceMap = do
+   return (Just interface)
+ 
+ 
++-- | Create a single interface from a one-shot .hi file
++createOneShotIface
++    :: Verbosity
++    -- ^ Verbosity requested by the caller
++    -> [Flag]
++    -- ^ Command line flags which Hadddock was invoked with
++    -> InstIfaceMap
++    -- ^ Map from module to corresponding installed interface file
++    -> FilePath
++    -- ^ Path to the one-shot .hi file
++    -> Ghc [Interface]
++    -- ^ Resulting interfaces
++createOneShotIface verbosity flags instIfaceMap hiFilePath = do
++
++  out verbosity verbose $ "Checking interface " ++ hiFilePath ++ "..."
++
++  hsc_env <- getSession
++  dflags <- getDynFlags
++
++  let
++    profile = targetProfile dflags
++    name_cache = hsc_NC hsc_env
++
++    loadHiFile :: FilePath -> IfG ModIface
++    loadHiFile hiFile = do
++
++      iface <- liftIO $ readBinIface profile name_cache IgnoreHiWay QuietBinIFace hiFile
++
++      initIfaceLcl (mi_semantic_module iface) (text "createOneShotIface") (mi_boot iface) $ do
++
++        new_eps_decls     <- tcIfaceDecls False (mi_decls iface)
++        new_eps_insts     <- mapM tcIfaceInst (mi_insts iface)
++        new_eps_fam_insts <- mapM tcIfaceFamInst (mi_fam_insts iface)
++
++        updateEps_ $ \eps -> eps
++          { eps_PTE          = extendNameEnvList (eps_PTE eps) new_eps_decls
++          , eps_inst_env     = extendInstEnvList (eps_inst_env eps) new_eps_insts
++          , eps_fam_inst_env = extendFamInstEnvList (eps_fam_inst_env eps) new_eps_fam_insts
++          }
++
++      pure iface
++
++  iface <- liftIO $ initIfaceLoad hsc_env $ do
++
++    -- load dependencies
++    traverse_ loadHiFile $ optOneShotDepHis flags
++
++    -- load the target hi file
++    loadHiFile hiFilePath
++
++  let
++    unit_state = hsc_units hsc_env
++    hieFilePath = case optOneShotHie flags of
++      Just hie -> hie
++      Nothing -> if Flag_HyperlinkedSource `elem` flags
++        then throwE $ "Missing .hie for " ++ hiFilePath ++ ", use --one-shot-hie to provide one"
++        else "unused-hie-file-path"
++
++  !interface <- do
++    logger <- getLogger
++    {-# SCC createInterface #-}
++      withTiming logger "createInterface" (const ()) $
++        runIfM (liftIO . fmap dropErr . lookupGlobal_maybe hsc_env) $
++          createInterface1' flags unit_state dflags hieFilePath iface mempty instIfaceMap mempty
++
++  pure [interface]
++
+ --------------------------------------------------------------------------------
+ -- * Building of cross-linking environment
+ --------------------------------------------------------------------------------
+diff --git a/utils/haddock/haddock-api/src/Haddock/Interface/Create.hs b/utils/haddock/haddock-api/src/Haddock/Interface/Create.hs
+index 29a457d141..15b0eb2666 100644
+--- a/utils/haddock/haddock-api/src/Haddock/Interface/Create.hs
++++ b/utils/haddock/haddock-api/src/Haddock/Interface/Create.hs
+@@ -30,7 +30,7 @@
+ -- which creates a Haddock 'Interface' from the typechecking
+ -- results 'TypecheckedModule' from GHC.
+ -----------------------------------------------------------------------------
+-module Haddock.Interface.Create (IfM, runIfM, createInterface1) where
++module Haddock.Interface.Create (IfM, runIfM, createInterface1, createInterface1') where
+ 
+ import Haddock.Convert (PrintRuntimeReps (..), tyThingToLHsDecl)
+ import Haddock.GhcUtils
+@@ -83,7 +83,7 @@ createInterface1
+   -> InstIfaceMap
+   -> ([ClsInst],[FamInst])
+   -> IfM m Interface
+-createInterface1 flags unit_state mod_sum mod_iface ifaces inst_ifaces (instances, fam_instances) = do
++createInterface1 flags unit_state mod_sum mod_iface ifaces inst_ifaces (instances, fam_instances) =
+ 
+   let
+     ModSummary
+@@ -97,8 +97,23 @@ createInterface1 flags unit_state mod_sum mod_iface ifaces inst_ifaces (instance
+           ml_hie_file
+         }
+       } = mod_sum
++  in
++    createInterface1' flags unit_state ms_hspp_opts ml_hie_file mod_iface ifaces inst_ifaces (instances, fam_instances)
++
++createInterface1'
++  :: MonadIO m
++  => [Flag]
++  -> UnitState
++  -> DynFlags
++  -> FilePath
++  -> ModIface
++  -> IfaceMap
++  -> InstIfaceMap
++  -> ([ClsInst],[FamInst])
++  -> IfM m Interface
++createInterface1' flags unit_state dflags hie_file mod_iface ifaces inst_ifaces (instances, fam_instances) = do
+ 
+-    dflags  = ms_hspp_opts
++  let
+     mdl     = mi_module mod_iface
+     sem_mdl = mi_semantic_module mod_iface
+     is_sig  = isJust (mi_sig_of mod_iface)
+@@ -218,7 +233,7 @@ createInterface1 flags unit_state mod_sum mod_iface ifaces inst_ifaces (instance
+     {
+       ifaceMod               = mdl
+     , ifaceIsSig             = is_sig
+-    , ifaceHieFile           = ml_hie_file
++    , ifaceHieFile           = hie_file
+     , ifaceInfo              = info
+     , ifaceDoc               = Documentation header_doc mod_warning
+     , ifaceRnDoc             = Documentation Nothing Nothing
+diff --git a/utils/haddock/haddock-api/src/Haddock/Options.hs b/utils/haddock/haddock-api/src/Haddock/Options.hs
+index 3d0dc02ce7..26759701b8 100644
+--- a/utils/haddock/haddock-api/src/Haddock/Options.hs
++++ b/utils/haddock/haddock-api/src/Haddock/Options.hs
+@@ -31,6 +31,9 @@ module Haddock.Options (
+   optShowInterfaceFile,
+   optLaTeXStyle,
+   optMathjax,
++  optOneShot,
++  optOneShotHie,
++  optOneShotDepHis,
+   qualification,
+   sinceQualification,
+   verbosity,
+@@ -121,6 +124,9 @@ data Flag
+   | Flag_IgnoreLinkSymbol String
+   | Flag_ParCount (Maybe Int)
+   | Flag_TraceArgs
++  | Flag_OneShotHi FilePath
++  | Flag_OneShotHie FilePath
++  | Flag_OneShotDepHi FilePath
+   deriving (Eq, Show)
+ 
+ 
+@@ -139,6 +145,12 @@ options backwardsCompat =
+       "write the resulting interface to FILE",
+     Option []     ["show-interface"] (ReqArg Flag_ShowInterface "FILE")
+       "print the interface in a human readable form",
++    Option [] ["one-shot-hi"] (ReqArg Flag_OneShotHi "FILE")
++      "generate documentation for a single module only, given its .hi file",
++    Option [] ["one-shot-hie"] (ReqArg Flag_OneShotHie "FILE")
++      "provide the .hie file for generating hyperlinked source in one-shot mode",
++    Option [] ["one-shot-dep-hi"] (ReqArg Flag_OneShotDepHi "FILE")
++      "provide .hi files for dependencies in one-shot mode",
+ --    Option ['S']  ["docbook"]  (NoArg Flag_DocBook)
+ --  "output in DocBook XML",
+     Option ['h']  ["html"]     (NoArg Flag_Html)
+@@ -323,6 +335,17 @@ optDumpInterfaceFile flags = optLast [ str | Flag_DumpInterface str <- flags ]
+ optShowInterfaceFile :: [Flag] -> Maybe FilePath
+ optShowInterfaceFile flags = optLast [ str | Flag_ShowInterface str <- flags ]
+ 
++
++optOneShot :: [Flag] -> Maybe FilePath
++optOneShot flags = optLast [ str | Flag_OneShotHi str <- flags ]
++
++optOneShotHie :: [Flag] -> Maybe FilePath
++optOneShotHie flags = optLast [ str | Flag_OneShotHie str <- flags ]
++
++optOneShotDepHis :: [Flag] -> [FilePath]
++optOneShotDepHis flags = [ str | Flag_OneShotDepHi str <- flags ]
++
++
+ optLaTeXStyle :: [Flag] -> Maybe String
+ optLaTeXStyle flags = optLast [ str | Flag_LaTeXStyle str <- flags ]
+ 
+-- 
+GitLab
+

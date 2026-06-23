@@ -3,12 +3,24 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 load("@buck2-haskell//:defs.bzl", "haskell_toolchain_library")
+load("@toolchains//:haskell_all.bzl", "mercury_haskell_toolchain_all")
 load("@toolchains//:libs.bzl", "toolchain_libraries")
 
 [haskell_toolchain_library(
     name = lib,
     visibility = ["//..."],
 ) for lib in toolchain_libraries]
+
+# NOTE: This target builds all the nix dependencies (haskell) and record the nix paths
+# into an output file. In our Haskell rules, by default, on developer's machine, Nix
+# packages are built lazily on demand, but for CI, batch processing of the whole Nix
+# dependency closure and updating cache is very useful, and we support that workflow
+# fully internalized in Buck2, reducing the potential errors.
+
+mercury_haskell_toolchain_all(
+    name = "all",
+    toolchain = "@toolchains//:haskell",
+)
 
 python_binary(
     name = "toolchain_libs",

@@ -16,7 +16,7 @@
   };
 
   inputs.flake-compat = {
-    url = "https://github.com/lix-project/flake-compat/archive/main.tar.gz";
+    url = "github:lix-project/flake-compat";
     flake = false;
   };
 
@@ -33,7 +33,7 @@
       let
         # FIXME(jadel): necessary patches need to get ported to 9.14, then
         # switch to 9.14 here.
-        compilerName = "ghc9103";
+        stockCompilerName = "ghc9103";
         pkgs = import nixpkgs {
           inherit system;
           overlays = import ./overlays ++ [
@@ -41,7 +41,8 @@
             (final: prev: {
               mercury = prev.mercury.overrideScope (
                 mfinal: mprev: {
-                  inherit compilerName;
+                  compilerName = "${stockCompilerName}-mercury";
+                  inherit stockCompilerName;
                 }
               );
             })
@@ -61,4 +62,9 @@
         };
       }
     );
+
+  nixConfig.extra-substituters = [ "https://cache.oss.mercury.com" ];
+  nixConfig.extra-trusted-public-keys = [
+    "cache.oss.mercury.com-1:COfsgEgHMrBhMvGoLWuNH5RDgub3/MT32n8kK50m2dc="
+  ];
 }

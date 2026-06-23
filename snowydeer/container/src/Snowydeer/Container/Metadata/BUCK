@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+load("//haskell:mercury_haskell.bzl", "mercury_haskell_library")
+
+mercury_haskell_library(
+    name = "Metadata",
+    srcs = glob(["*.hs"]),
+    visibility = ["//snowydeer/container/..."],
+    deps = [
+        "//haskell:aeson",
+        "//haskell:base",
+        "//haskell:rio",
+        "//haskell:unordered-containers",
+    ],
+)

@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+load("//haskell:mercury_haskell.bzl", "mercury_haskell_binary", "mercury_haskell_library")
+
+mercury_haskell_library(
+    name = "Container",
+    srcs = glob(
+        ["*.hs"],
+        exclude = ["Main.hs"],
+    ),
+    extra_compiler_flags = [
+        "-D__OSS__=1",  # @moss-enable
+    ],
+    visibility = ["//snowydeer/container/..."],
+    deps = [
+        "//haskell:aeson",
+        "//haskell:base",
+        "//haskell:bytestring",
+        "//haskell:either",
+        "//haskell:monad-logger",
+        "//haskell:optparse-applicative",
+        "//haskell:rio",
+        "//haskell:text",
+        "//haskell:unordered-containers",
+        "//local-packages/a-mercury-prelude",
+        # @moss-disable[end= ]: "//local-packages/mercury-company-metadata",
+        "//snowydeer/container/src/Snowydeer/Container/Metadata",
+    ],
+)
+
+mercury_haskell_binary(
+    name = "container_unwrapped",
+    srcs = ["Main.hs"],
+    linker_flags = [
+        "-threaded",
+        "-with-rtsopts=-N",
+    ],
+    main = "Snowydeer.Container.Main",
+    visibility = ["//snowydeer/container:"],
+    deps = [
+        ":Container",
+        "//haskell:base",
+        "//local-packages/a-mercury-prelude",
+    ],
+)

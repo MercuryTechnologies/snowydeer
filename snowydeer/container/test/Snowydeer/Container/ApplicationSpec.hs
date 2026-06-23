@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT OR Apache-2.0
 {-# OPTIONS_GHC "-Wno-incomplete-uni-patterns" #-}
 
-module Snowydeer.ContainerSpec (main) where
+module Snowydeer.Container.ApplicationSpec (main) where
 
 import A.MercuryPrelude.RequireCallStack hiding (error)
 import Control.Monad qualified as Monad
@@ -13,7 +13,7 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import RIO
-import Snowydeer.Container hiding (main)
+import Snowydeer.Container.Application hiding (main)
 import Snowydeer.Container.Metadata.Types
 import Snowydeer.Container.Types
 import Test.Hspec

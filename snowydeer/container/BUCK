@@ -2,94 +2,12 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-load("//haskell:haskell_spec.bzl", "local_packages_spec")
-load("//haskell:mercury_haskell.bzl", "mercury_haskell_binary", "mercury_haskell_library")
-
-mercury_haskell_library(
-    name = "lib",
-    srcs = glob([
-        "src/Snowydeer/Container.hs",
-        "src/Snowydeer/Container/*.hs",
-        "src/Snowydeer/Container/Metadata/*.hs",
-    ]),
-    extra_compiler_flags = [
-        "-D__OSS__=1",  # @moss-enable
-    ],
-    deps = [
-        "//haskell:aeson",
-        "//haskell:base",
-        "//haskell:bytestring",
-        "//haskell:either",
-        "//haskell:monad-logger",
-        "//haskell:optparse-applicative",
-        "//haskell:rio",
-        "//haskell:text",
-        "//haskell:unordered-containers",
-        "//local-packages/a-mercury-prelude",
-        # @moss-disable[end= ]: "//local-packages/mercury-company-metadata",
-    ],
-)
-
 command_alias(
     name = "container",
     args = [
         "--skopeo-exe=$(exe toolchains//:skopeo)",
     ],
-    exe = ":container_unwrapped",
+    exe = "//snowydeer/container/src/Snowydeer/Container:container_unwrapped",
     # used by //snowydeer:container.bzl
     visibility = ["PUBLIC"],
-)
-
-mercury_haskell_binary(
-    name = "container_unwrapped",
-    srcs = ["src/Snowydeer/ContainerMain.hs"],
-    main = "Snowydeer.ContainerMain",
-    deps = [
-        ":lib",
-        "//haskell:base",
-        "//local-packages/a-mercury-prelude",
-    ],
-)
-
-local_packages_spec(
-    name = "container_spec",
-    srcs = [
-        "test/Snowydeer/ContainerSpec.hs",
-    ],
-    main = "Snowydeer.ContainerSpec",
-    deps = [
-        ":lib",
-        "//haskell:aeson",
-        "//haskell:base",
-        "//haskell:bytestring",
-        "//haskell:containers",
-        "//haskell:hspec",
-        "//haskell:hspec-expectations",
-        "//haskell:rio",
-        "//haskell:text",
-        "//haskell:unliftio",
-        "//haskell:unordered-containers",
-        "//local-packages/a-mercury-prelude",
-    ],
-)
-
-local_packages_spec(
-    name = "container_pipeline_spec",
-    srcs = [
-        "test/Snowydeer/Container/PipelineSpec.hs",
-    ],
-    main = "Snowydeer.Container.PipelineSpec",
-    deps = [
-        ":lib",
-        "//haskell:aeson",
-        "//haskell:bytestring",
-        "//haskell:hspec",
-        "//haskell:hspec-expectations",
-        "//haskell:rio",
-        "//haskell:shakespeare",
-        "//haskell:text",
-        "//haskell:unliftio",
-        "//haskell:unordered-containers",
-        "//local-packages/a-mercury-prelude",
-    ],
 )

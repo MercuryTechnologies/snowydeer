@@ -1,0 +1,46 @@
+From d6854b68e5da314d611528fc0a970d4f22c7afd4 Mon Sep 17 00:00:00 2001
+From: Sjoerd Visscher <sjoerd.visscher@tweag.io>
+Date: Tue, 30 Apr 2024 18:47:33 +0200
+Subject: [PATCH] Update DynFlags with extensions set in source
+
+---
+ haddock-api/src/Haddock/Interface.hs | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/utils/haddock/haddock-api/src/Haddock/Interface.hs b/utils/haddock/haddock-api/src/Haddock/Interface.hs
+index 488f74f368..26b192b287 100644
+--- a/utils/haddock/haddock-api/src/Haddock/Interface.hs
++++ b/utils/haddock/haddock-api/src/Haddock/Interface.hs
+@@ -57,6 +57,7 @@ import System.Exit (exitFailure ) -- TODO use Haddock's die
+ import Text.Printf
+ 
+ import GHC hiding (verbosity, SuccessFlag(..))
++import qualified GHC.Data.EnumSet as EnumSet
+ import GHC.Data.FastString (unpackFS)
+ import GHC.Data.Graph.Directed
+ import GHC.Data.Maybe
+@@ -388,12 +389,20 @@ createOneShotIface verbosity flags instIfaceMap hiFilePath = do
+         then throwE $ "Missing .hie for " ++ hiFilePath ++ ", use --one-shot-hie to provide one"
+         else "unused-hie-file-path"
+ 
++  -- Update the DynFlags with the extensions from the source file (as stored in the interface file)
++  let dflags' = case mi_docs iface of
++                  Just docs -> setExtensions $ setLanguage dflags
++                    where
++                      setLanguage df = lang_set df (docs_language docs)
++                      setExtensions df = foldl' xopt_set df $ EnumSet.toList (docs_extensions docs)
++                  Nothing -> dflags
++
+   !interface <- do
+     logger <- getLogger
+     {-# SCC createInterface #-}
+       withTiming logger "createInterface" (const ()) $
+         runIfM (liftIO . fmap dropErr . lookupGlobal_maybe hsc_env) $
+-          createInterface1' flags unit_state dflags hieFilePath iface mempty instIfaceMap insts
++          createInterface1' flags unit_state dflags' hieFilePath iface mempty instIfaceMap insts
+ 
+   pure [interface]
+ 
+-- 
+GitLab
+

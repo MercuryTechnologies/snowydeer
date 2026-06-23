@@ -71,7 +71,7 @@ default_ghc_flags = ["-X" + ext for ext in default_extensions] + [
     "-Wno-unused-packages",  # Some tooling gives this error
     "-Wno-operator-whitespace",  # GHC bug? https://gitlab.haskell.org/ghc/ghc/-/issues/23297
     "-Wno-missing-kind-signatures",  # Noisy
-    "-fno-warn-ambiguous-fields",  # Combines poorly with DuplicateRecordFields
+    "-Wno-ambiguous-fields",  # Combines poorly with DuplicateRecordFields
 
     # GHC 9.10+:
     # GHC >= 9.8 is stricter.

@@ -7,6 +7,7 @@ load("@prelude//toolchains:remote_test_execution.bzl", "remote_test_execution_to
 load("@toolchains//nix:default_toolchains.bzl", "default_flake_attrs", "default_nix_toolchains", "exec_compatible_with")
 load("@toolchains//nix:nix_build.bzl", "nix_build")
 load("@toolchains//nix:nix_haskell_toolchain.bzl", "nix_haskell_toolchain")
+load("@toolchains//nix:nix_upload.bzl", "flake_nix_paths")
 
 # Define cxx, rust, bash, and python toolchains
 default_nix_toolchains()
@@ -85,4 +86,34 @@ nix_build(
     binary = "skopeo",
     flake = "@nix//:nix_overlays",
     visibility = ["PUBLIC"],
+)
+
+nix_build(
+    name = "cache-hook",
+    binary = "cache-hook",
+    flake = "@nix//:nix_overlays",
+    visibility = ["PUBLIC"],
+)
+
+# This creates a list of nix paths corresponding to the listed buck2 target items
+# derived from nix flakes. With [upload] subtarget, those nix paths can be
+# automatically uploaded to S3 nix cache by cache-hook script.
+#
+# Remake the list with:
+# buck uquery 'kind("nix_build", toolchains//:)' | awk '{ print "\"" $1 "\"," }'
+
+flake_nix_paths(
+    name = "all_nix_flakes",
+    flakes = [
+        "toolchains//:bash",
+        "toolchains//:cache-hook",
+        "toolchains//:ghc",
+        "toolchains//:hspec-discover",
+        "toolchains//:nix_cxx",
+        "toolchains//:nix_rust",
+        "toolchains//:pyrefly",
+        "toolchains//:python_bootstrap_interpreter",
+        "toolchains//:ripgrep",
+        "toolchains//:skopeo",
+    ],
 )

@@ -19,10 +19,15 @@ let
       fabricateStringContext = final.callPackage ../lib/fabricateStringContext.nix { };
     };
   };
+
+  lix = final: prev: {
+    nix = final.lixPackageSets.latest.lix;
+  };
 in
 [
   libAdditions
   packagesDir
+  lix
   (import ./ghc.nix)
   (import ./haskell.nix)
 ]

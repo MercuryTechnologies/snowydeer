@@ -29,13 +29,13 @@ let
     rustc = toolchain;
   };
   pname = "buck2";
-  git_rev = "mwb-2026-04-03-base-2026-01-19";
+  git_rev = "d4ad08a7e424eeaea5dc14eb0996285306cddc7a";
 
   src = fetchFromGitHub {
     owner = "MercuryTechnologies";
     repo = pname;
     rev = git_rev;
-    hash = "sha256-w9IYlDuOycyXEAC8oGDnwALmdLhJVQoFx/RfEjMZw+Q=";
+    hash = "sha256-XPatFleOD/3GzS2rubnKhT+Kmj9Hat9y5dygHWkEo0s=";
   };
 
   toolchain = fenix.fromToolchainFile {
@@ -57,16 +57,26 @@ rustPlatform.buildRustPackage {
     # We give these hashes explicitly to speed up Nix evaluation (allowBuiltinFetchGit blocks evaluation on git fetch!).
     # Get this stanza from `buck run nix//tools/nix-prefetch-cargo nix/packages/buck2-source/Cargo.lock`
     outputHashes = {
+      "hyper-1.9.0" = "sha256-XnUOQYfPa+LKOx7aKz5wv4tL9hXirJ7UkrMBiM7bHb4=";
       "perf-event-0.4.8" = "sha256-Mvfp41Q9g9Z9xgdzFEdIdH/96YeCxrrSl2Vsm6geGMQ=";
       "perf-event-open-sys-5.0.0" = "sha256-Mvfp41Q9g9Z9xgdzFEdIdH/96YeCxrrSl2Vsm6geGMQ=";
       "probminhash-0.1.12" = "sha256-8IzGV6QDvyBPavICUB4j/VABBkplGa+sSsIz1OD35ik=";
-      "sorted_vector_map-0.2.0" = "sha256-f+MfSyQuotcoT/aNrfS9uvPlNwFS8JasTTVgvY08pPo=";
+      "sorted_vector_map-0.2.0" = "sha256-+6uh2hNKE7gHl756rtkpd6U2RDsQKLo2RVJ2OFqloVg=";
+      "tonic-0.14.5" = "sha256-bf88XZMzeplglunUDOU5XWFgKpbzoVV1r4Sj3qvhOHQ=";
+      "tonic-build-0.14.5" = "sha256-bf88XZMzeplglunUDOU5XWFgKpbzoVV1r4Sj3qvhOHQ=";
+      "tonic-prost-0.14.5" = "sha256-bf88XZMzeplglunUDOU5XWFgKpbzoVV1r4Sj3qvhOHQ=";
+      "tonic-prost-build-0.14.5" = "sha256-bf88XZMzeplglunUDOU5XWFgKpbzoVV1r4Sj3qvhOHQ=";
     };
   };
 
   postPatch = ''
     cp ${./Cargo.lock} Cargo.lock
     chmod +w Cargo.lock  # Huh???
+    # tonic-health and tonic-reflection are listed as patches in Cargo.toml but
+    # are unused ([patch.unused] in Cargo.lock). Cargo still validates them offline,
+    # but the nix vendor dir omits [[patch.unused]] packages, so remove these entries
+    # to avoid offline validation failures.
+    sed -i '/tonic-health.*edef1c/d; /tonic-reflection.*edef1c/d' Cargo.toml
   '';
 
   nativeBuildInputs = [

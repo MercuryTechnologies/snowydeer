@@ -44,6 +44,7 @@ def main():
         ["nix", "derivation", "show", "--stdin"],
         input="\n".join(f"{p}^*" for p in sorted(drvs)),
         text=True,
+        check=True,
         stdout=args.output,
     )
 

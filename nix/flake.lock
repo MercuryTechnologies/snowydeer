@@ -24,14 +24,17 @@
     "flake-compat": {
       "flake": false,
       "locked": {
-        "lastModified": 1751685974,
-        "narHash": "sha256-NKw96t+BgHIYzHUjkTK95FqYRVKB8DHpVhefWSz/kTw=",
-        "type": "tarball",
-        "url": "https://github.com/lix-project/flake-compat/archive/main.tar.gz"
+        "lastModified": 1777699697,
+        "narHash": "sha256-Eg9b/rq/ECYwNwEXs5i9wHyhxNI0JrYx2srdI2uZMaQ=",
+        "owner": "lix-project",
+        "repo": "flake-compat",
+        "rev": "382052b74656a369c5408822af3f2501e9b1af81",
+        "type": "github"
       },
       "original": {
-        "type": "tarball",
-        "url": "https://github.com/lix-project/flake-compat/archive/main.tar.gz"
+        "owner": "lix-project",
+        "repo": "flake-compat",
+        "type": "github"
       }
     },
     "flake-utils": {

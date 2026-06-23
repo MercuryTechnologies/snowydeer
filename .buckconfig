@@ -64,5 +64,10 @@ materializations = deferred
 hash_all_commands = true
 file_watcher = watchman
 
+# This is used to distinguish whether this project's root cell is our
+# shim-based one, or if someone has imported snowydeer from another project.
+[mercury]
+is_shim = true
+
 [build]
 execution_platforms = prelude//platforms:default

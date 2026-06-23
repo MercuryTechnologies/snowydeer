@@ -1,7 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
 --
 -- SPDX-License-Identifier: MIT OR Apache-2.0
-{-# OPTIONS_GHC -fno-warn-orphans #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module A.MercuryPrelude.Data.Time
   ( module A.MercuryPrelude.Data.Time,

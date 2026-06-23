@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT OR Apache-2.0
 
 -- | Metadata validation for Snowydeer.
-module Snowydeer.Container.Metadata where
+module Snowydeer.Container.Metadata.Validation where
 
 import Data.HashMap.Strict qualified as HashMap
 import Data.Semigroup (sconcat)

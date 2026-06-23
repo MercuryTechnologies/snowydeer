@@ -40,6 +40,8 @@ def _nix_cxx_toolchain(ctx: AnalysisContext) -> list[Provider]:
     compiler = compiler
     cxx_compiler = cxx_compiler
     linker = cxx_compiler
+    if ctx.attrs.linker_override:
+        linker = ctx.attrs.linker_override[RunInfo]
     linker_type = LinkerType("gnu")
     pic_behavior = PicBehavior("supported")
     binary_extension = ""
@@ -60,6 +62,9 @@ def _nix_cxx_toolchain(ctx: AnalysisContext) -> list[Provider]:
         pass
     else:
         additional_linker_flags = ["-fuse-ld=lld"]
+
+    if ctx.attrs.linker_type_override:
+        linker_type = LinkerType(ctx.attrs.linker_type_override)
 
     if compiler_type == "clang":
         llvm_link = RunInfo(args = ["llvm-link"])
@@ -144,6 +149,8 @@ nix_cxx_toolchain = rule(
         "cxx_flags": attrs.list(attrs.string(), default = []),
         "link_ordering": attrs.option(attrs.enum(LinkOrdering.values()), default = None),
         "link_flags": attrs.list(attrs.string(), default = []),
+        "linker_override": attrs.option(attrs.dep(providers = [RunInfo]), default = None),
+        "linker_type_override": attrs.option(attrs.string(), default = None),
         "link_style": attrs.string(default = "shared"),
         "nix_cc": attrs.dep(
             default = "//:nix_cxx",

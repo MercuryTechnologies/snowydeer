@@ -22,7 +22,12 @@ It operates in five stages:
 
 # Getting started
 
-FIXME(jadel): We want nix caches with haskell packages and buck2 pre-built. For now you have to build a haskell toolchain from source, sorry.
+Set up the Nix cache (we try to do it with envrc, but needs configuring in `/etc/nix/nix.conf` if not trusted-user) with:
+
+```
+extra-substituters = https://cache.oss.mercury.com
+extra-trusted-public-keys = cache.oss.mercury.com-1:COfsgEgHMrBhMvGoLWuNH5RDgub3/MT32n8kK50m2dc=
+```
 
 Run: `direnv allow` in the repo root.
 This will get you a simple dev shell with buck2.

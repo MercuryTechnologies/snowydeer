@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
+load("//third_party/mercury_ci:ci_script.bzl", "ci_script")
 load(":package.bzl", "transition_to_static")
 
 python_binary(
@@ -25,4 +26,12 @@ command_alias(
 
 transition_to_static(
     name = "transition_to_static",
+)
+
+ci_script(
+    name = "ci",
+    main = "snowydeer_ci.py",
+    deps = [
+        "//third_party/mercury_ci",
+    ],
 )

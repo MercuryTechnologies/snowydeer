@@ -8,12 +8,13 @@ Configuration modifier setup.
 
 load("@prelude//cfg/modifier:cfg_constructor.bzl", "cfg_constructor_post_constraint_analysis", "cfg_constructor_pre_constraint_analysis")
 load("@prelude//cfg/modifier:common.bzl", "MODIFIER_METADATA_KEY")
+load("//buck:maybe_set_cfg_constructor.bzl", "maybe_set_cfg_constructor")
 
 # https://buck2.build/docs/users/how_tos/modifiers_setup/
 #
 # This is required for -m MODIFIER to do anything. Otherwise you need
 # to use configuration transitions.
-native.set_cfg_constructor(
+maybe_set_cfg_constructor(
     aliases = struct(
         release = [
             "//constraints/link_style:static_pic",

@@ -1,7 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
 --
 -- SPDX-License-Identifier: MIT OR Apache-2.0
-{-# OPTIONS_GHC -fno-warn-duplicate-exports #-}
+{-# OPTIONS_GHC -Wno-duplicate-exports #-}
 
 -- GHC warns because `throwWithCallStack` is exported from RequireCallStack and
 -- explicitly, for module doc reasons.
@@ -158,6 +158,16 @@ unsafeThrowWithoutAnnotations = Safe.throw
 
 -- | An implementation of 'generalBracket' that uses 'MonadUnliftIO'. Only use
 -- this when defining instances - otherwise, prefer 'generalBracket'.
+--
+-- On the failure path, this rethrows the original exception unchanged. It
+-- does not wrap the exception in 'AnnotatedException' or attach a 'CallStack'
+-- annotation at the bracket boundary. Annotation responsibility belongs at
+-- throw sites (via 'throwWithCallStack' and friends) and at explicit boundary
+-- handlers (e.g. @clientRethrow@). Keeping bracket primitives transparent to
+-- exception payloads ensures that consumers which expect a bare exception
+-- (notably hspec's failure formatter pattern-matching on 'HUnitFailure') are
+-- not broken simply because the throw happened inside a 'bracket'-using
+-- helper such as state save/restore.
 generalBracketIO ::
   (MonadUnliftIO m) =>
   m a ->
@@ -173,7 +183,7 @@ generalBracketIO acquire release action = do
         -- explicitly ignore exceptions from after
         _ :: Either SomeException c <-
           UnliftIO.try $ UnliftIO.uninterruptibleMask_ $ release x (Catch.ExitCaseException e1)
-        provideCallStack throwWithCallStackIO e1
+        UnliftIO.throwIO e1
       Right y -> do
         c <- UnliftIO.uninterruptibleMask_ $ release x (Catch.ExitCaseSuccess y)
         pure (y, c)

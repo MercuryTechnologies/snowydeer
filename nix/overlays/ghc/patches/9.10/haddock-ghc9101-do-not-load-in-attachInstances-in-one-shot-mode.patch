@@ -1,0 +1,130 @@
+From b11c4d939bfd53e26de4d298266e6a5c46f73009 Mon Sep 17 00:00:00 2001
+From: Sjoerd Visscher <sjoerd.visscher@tweag.io>
+Date: Wed, 24 Apr 2024 15:31:40 +0200
+Subject: [PATCH] Don't load in attachInstances in one shot mode
+
+---
+ haddock-api/src/Haddock/Interface.hs          | 27 +++++++++++--------
+ .../src/Haddock/Interface/AttachInstances.hs  | 11 +++++---
+ 2 files changed, 23 insertions(+), 15 deletions(-)
+
+diff --git a/utils/haddock/haddock-api/src/Haddock/Interface.hs b/utils/haddock/haddock-api/src/Haddock/Interface.hs
+index 49d80bfcda..488f74f368 100644
+--- a/utils/haddock/haddock-api/src/Haddock/Interface.hs
++++ b/utils/haddock/haddock-api/src/Haddock/Interface.hs
+@@ -65,6 +65,7 @@ import GHC.Driver.Monad
+ import GHC.Driver.Make
+ import GHC.Driver.Main
+ import GHC.Core.InstEnv
++import GHC.Core.FamInstEnv (extendFamInstEnvList, emptyFamInstEnv)
+ import GHC.Driver.Session hiding (verbosity)
+ import GHC.HsToCore.Docs (getMainDeclBinder)
+ import GHC.Iface.Binary (CheckHiWay(..), TraceBinIFace(..), readBinIface)
+@@ -74,10 +75,9 @@ import GHC.Tc.Utils.Env (lookupGlobal_maybe)
+ import GHC.Types.Error (mkUnknownDiagnostic)
+ import GHC.Types.Name.Occurrence (emptyOccEnv)
+ import GHC.Types.Name.Env (extendNameEnvList)
+-import GHC.Core.InstEnv (extendInstEnvList)
+-import GHC.Core.FamInstEnv (extendFamInstEnvList)
+ import GHC.Unit.External (ExternalPackageState (..))
+ import GHC.Unit.Home.ModInfo
++import GHC.Unit.Module (extendModuleEnv)
+ import GHC.Unit.Module.Graph (ModuleGraphNode (..))
+ import GHC.Unit.Module.ModDetails
+ import GHC.Unit.Module.ModIface (mi_decls, mi_semantic_module, mi_boot, mi_insts, mi_fam_insts)
+@@ -131,7 +131,7 @@ processModules verbosity modules flags extIfaces = do
+ 
+   interfaces' <- {-# SCC attachInstances #-}
+                  withTimingM "attachInstances" (const ()) $ do
+-                   attachInstances (exportedNames, mods) interfaces instIfaceMap
++                   attachInstances (exportedNames, mods) interfaces instIfaceMap (isJust oneShotHiFile)
+ 
+   -- Combine the link envs of the external packages into one
+   let extLinks  = Map.unions (map ifLinkEnv extIfaces)
+@@ -348,26 +348,31 @@ createOneShotIface verbosity flags instIfaceMap hiFilePath = do
+     profile = targetProfile dflags
+     name_cache = hsc_NC hsc_env
+ 
+-    loadHiFile :: FilePath -> IfG ModIface
++    loadHiFile :: FilePath -> IfG (ModIface, ([ClsInst],[FamInst]))
+     loadHiFile hiFile = do
+ 
+       iface <- liftIO $ readBinIface profile name_cache IgnoreHiWay QuietBinIFace hiFile
+ 
+-      initIfaceLcl (mi_semantic_module iface) (text "createOneShotIface") (mi_boot iface) $ do
++      insts <- initIfaceLcl (mi_semantic_module iface) (text "createOneShotIface") (mi_boot iface) $ do
+ 
+         new_eps_decls     <- tcIfaceDecls False (mi_decls iface)
+         new_eps_insts     <- mapM tcIfaceInst (mi_insts iface)
+         new_eps_fam_insts <- mapM tcIfaceFamInst (mi_fam_insts iface)
+ 
++        let fam_inst_env = extendFamInstEnvList emptyFamInstEnv new_eps_fam_insts
++
+         updateEps_ $ \eps -> eps
+-          { eps_PTE          = extendNameEnvList (eps_PTE eps) new_eps_decls
+-          , eps_inst_env     = extendInstEnvList (eps_inst_env eps) new_eps_insts
+-          , eps_fam_inst_env = extendFamInstEnvList (eps_fam_inst_env eps) new_eps_fam_insts
++          { eps_PTE              = extendNameEnvList (eps_PTE eps) new_eps_decls
++          , eps_inst_env         = extendInstEnvList (eps_inst_env eps) new_eps_insts
++          , eps_fam_inst_env     = extendFamInstEnvList (eps_fam_inst_env eps) new_eps_fam_insts
++          , eps_mod_fam_inst_env = extendModuleEnv (eps_mod_fam_inst_env eps) (mi_module iface) fam_inst_env
+           }
+ 
+-      pure iface
++        pure (new_eps_insts, new_eps_fam_insts)
++
++      pure (iface, insts)
+ 
+-  iface <- liftIO $ initIfaceLoad hsc_env $ do
++  (iface, insts) <- liftIO $ initIfaceLoad hsc_env $ do
+ 
+     -- load dependencies
+     traverse_ loadHiFile $ optOneShotDepHis flags
+@@ -388,7 +393,7 @@ createOneShotIface verbosity flags instIfaceMap hiFilePath = do
+     {-# SCC createInterface #-}
+       withTiming logger "createInterface" (const ()) $
+         runIfM (liftIO . fmap dropErr . lookupGlobal_maybe hsc_env) $
+-          createInterface1' flags unit_state dflags hieFilePath iface mempty instIfaceMap mempty
++          createInterface1' flags unit_state dflags hieFilePath iface mempty instIfaceMap insts
+ 
+   pure [interface]
+ 
+diff --git a/utils/haddock/haddock-api/src/Haddock/Interface/AttachInstances.hs b/utils/haddock/haddock-api/src/Haddock/Interface/AttachInstances.hs
+index 9120d293cc..1337ee8e08 100644
+--- a/utils/haddock/haddock-api/src/Haddock/Interface/AttachInstances.hs
++++ b/utils/haddock/haddock-api/src/Haddock/Interface/AttachInstances.hs
+@@ -32,6 +32,7 @@ import Haddock.Types
+ import Control.Applicative ((<|>))
+ import Control.Arrow hiding ((<+>))
+ import Control.DeepSeq (force)
++import Control.Monad (unless)
+ import Data.Foldable (foldl')
+ import Data.List (sortBy)
+ import qualified Data.Sequence as Seq
+@@ -75,8 +76,8 @@ type Modules = Set.Set Module
+ type ExportInfo = (ExportedNames, Modules)
+ 
+ -- Also attaches fixities
+-attachInstances :: ExportInfo -> [Interface] -> InstIfaceMap -> Ghc [Interface]
+-attachInstances expInfo ifaces instIfaceMap = do
++attachInstances :: ExportInfo -> [Interface] -> InstIfaceMap -> Bool -> Ghc [Interface]
++attachInstances expInfo ifaces instIfaceMap isOneShot = do
+ 
+   -- We need to keep load modules in which we will look for instances. We've
+   -- somewhat arbitrarily decided to load all modules which are available -
+@@ -100,8 +101,10 @@ attachInstances expInfo ifaces instIfaceMap = do
+   (_msgs, mb_index) <- do
+     hsc_env <- getSession
+     liftIO $ runTcInteractive hsc_env $ do
+-      let doc = text "Need interface for haddock"
+-      initIfaceTcRn $ mapM_ (loadSysInterface doc) mods_to_load
++      -- In one shot mode we don't want to load anything more than is already loaded
++      unless isOneShot $ do
++        let doc = text "Need interface for haddock"
++        initIfaceTcRn $ mapM_ (loadSysInterface doc) mods_to_load
+       cls_env@InstEnvs{ie_global, ie_local} <- tcGetInstEnvs
+       fam_env@(pkg_fie, home_fie) <- tcGetFamInstEnvs
+       -- We use Data.Sequence.Seq because we are creating left associated
+-- 
+GitLab
+

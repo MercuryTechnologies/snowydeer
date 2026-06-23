@@ -11,6 +11,7 @@ definitely makes this stuff less DAMP. Maybe we want to move the base
 non-Haskell toolchains to another BUCK file and use a pile of aliases?
 """
 
+load("@prelude//platforms:defs.bzl", "host_configuration")
 load("@toolchains//nix:nix_bash_toolchain.bzl", "nix_bash_genrule_toolchain")
 load("@toolchains//nix:nix_build.bzl", "nix_build")
 load("@toolchains//nix:nix_cxx_toolchain.bzl", "nix_cxx_toolchain")
@@ -25,10 +26,12 @@ exec_compatible_with = [
         "prelude//os:linux": "prelude//os:linux",
         "prelude//os:macos": "prelude//os:macos",
         "prelude//os:windows": "prelude//os:windows",
+        "prelude//os:none": host_configuration.os,
     }),
     select({
         "prelude//cpu:arm64": "prelude//cpu:arm64",
         "prelude//cpu:x86_64": "prelude//cpu:x86_64",
+        "prelude//cpu:wasm32": host_configuration.cpu,
     }),
 ]
 
@@ -44,6 +47,18 @@ def default_nix_toolchains():
             "DEFAULT": "shared",
             "root//constraints/link_style:shared": "shared",
             "root//constraints/link_style:static_pic": "static_pic",
+        }),
+        linker_override = select({
+            "DEFAULT": None,
+            "config//os:none": select({
+                "config//cpu:wasm32": "//:nix_wasm_ld",
+            }),
+        }),
+        linker_type_override = select({
+            "DEFAULT": None,
+            "config//os:none": select({
+                "config//cpu:wasm32": "wasm",
+            }),
         }),
         visibility = ["PUBLIC"],
     )
@@ -97,6 +112,13 @@ def default_flake_attrs():
             "clippy-driver",
             "rustdoc",
         ],
+        flake = "@nix//:nix_overlays",
+    )
+
+    nix_build(
+        name = "nix_wasm_ld",
+        attr = "wasm-ld",
+        binary = "wasm-ld",
         flake = "@nix//:nix_overlays",
     )
 

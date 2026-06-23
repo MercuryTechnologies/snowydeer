@@ -1,7 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
 --
 -- SPDX-License-Identifier: MIT OR Apache-2.0
-{-# OPTIONS_GHC -fno-warn-duplicate-exports #-}
+{-# OPTIONS_GHC -Wno-duplicate-exports #-}
 
 -- GHC warns because `throwWithCallStack` is exported from RequireCallStack and
 -- explicitly, for module doc reasons.

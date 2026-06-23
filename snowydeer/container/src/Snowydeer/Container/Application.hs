@@ -8,7 +8,7 @@
 --
 -- This calls Snowydeer on the buck targets that need it, produces the store
 -- paths, then passes those into the Nix docker builder.
-module Snowydeer.Container
+module Snowydeer.Container.Application
   ( -- * Build plans
     InputPath (..),
     GitRevInfo (..),
@@ -43,14 +43,14 @@ import Data.Text.IO qualified as TIO
 import Options.Applicative (execParser)
 import RIO hiding (error)
 import RIO.Process
-import Snowydeer.Container.Metadata
 import Snowydeer.Container.Metadata.Types
+import Snowydeer.Container.Metadata.Validation
 import Snowydeer.Container.Opts
 import Snowydeer.Container.Pipeline
 import Snowydeer.Container.Types
 
 #ifndef __OSS__
-import Snowydeer.Container.Metadata.Mercury
+import Snowydeer.Container.Mercury
 #endif
 
 -- | Object to be turned into a store path.

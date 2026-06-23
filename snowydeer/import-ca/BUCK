@@ -5,6 +5,7 @@
 rust_binary(
     name = "import-ca",
     srcs = glob(["src/**/*.rs"]),
+    target_compatible_with = ["config//:none"],
     visibility = ["//snowydeer:"],
     deps = [
         "//third_party/rust:clap",

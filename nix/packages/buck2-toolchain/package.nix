@@ -9,9 +9,11 @@
   writeShellScriptBin,
 
   compilerName,
+  cache-hook,
 
   # keep-sorted start
   bash,
+  buck2-source,
   cacert,
   clippy,
   coreutils,
@@ -157,6 +159,7 @@ in
   python = python3;
   inherit
     # keep-sorted start
+    buck2-source # just so it gets uploaded to cache
     pyrefly-wrapper
     ripgrep
     skopeo
@@ -166,4 +169,11 @@ in
   inherit (hsPkgs)
     hspec-discover
     ;
+
+  cache-hook = cache-hook {
+    destination = "s3://cache.oss.mercury.com";
+    # XXX(jadel): this is really nasty, but we don't really have a better way
+    # to do it, since the cache hook ideally takes an absolute path
+    secretKey = "/tmp/mercury-ci/keys/oss-signing-key";
+  };
 }

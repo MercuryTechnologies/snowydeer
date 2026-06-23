@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+python_library(
+    name = "mercury_ci",
+    srcs = glob(["*.py"]),
+    base_module = "mercury_ci",
+    typing = True,
+    visibility = ["PUBLIC"],
+)

@@ -7,6 +7,7 @@ final: prev:
 
 let
   inherit (prev.haskell.lib.compose) dontCheck;
+  inherit (final.mercury) compilerName stockCompilerName;
 
   mkGhcSrc =
     {
@@ -130,9 +131,17 @@ let
 in
 {
   haskell = prev.haskell // {
+    packages = prev.haskell.packages // {
+      # Create the Mercury patched Haskell set
+      ${compilerName} = prev.haskell.packages.${stockCompilerName}.override {
+        ghc = final.haskell.compiler.${compilerName};
+        buildHaskellPackages = final.buildPackages.haskell.packages.${compilerName};
+      };
+    };
+
     compiler = prev.haskell.compiler // {
-      ghc9103 = mkGhc {
-        compiler = prev.haskell.compiler.ghc9103;
+      ${compilerName} = mkGhc {
+        compiler = prev.haskell.compiler.${stockCompilerName};
         src = ghc9101Src;
         patches = ghc910Patches;
         bootPkgs = ghc9103BootPkgs;

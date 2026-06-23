@@ -13,13 +13,13 @@ raw deps attr.
 """
 
 def _impl_toolchain_libs(ctx: bxl.Context):
-    hs_targets = ctx.uquery().kind("haskell_library|haskell_binary", "root//...")
+    hs_targets = ctx.uquery().kind("haskell_library|haskell_binary|ghc_plugin", ["root//...", "buck2-haskell//tests/..."])
 
     toolchain_libs = {
         dep.name: None
         for target in hs_targets
         for dep in target.attrs.deps.value()
-        if str(dep.path) == "root//haskell"
+        if str(dep.path) == "root//haskell" or str(dep.path) == "buck2-haskell//tests"
     }
 
     ctx.output.print(json.encode(toolchain_libs.keys()))

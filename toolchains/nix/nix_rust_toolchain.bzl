@@ -38,6 +38,9 @@ _DEFAULT_TRIPLE = select({
             "config//abi:msvc": "x86_64-pc-windows-msvc",
         }),
     }),
+    "config//os:none": select({
+        "config//cpu:wasm32": "wasm32-unknown-unknown",
+    }),
 })
 
 def _nix_rust_toolchain(ctx: AnalysisContext) -> list[Provider]:

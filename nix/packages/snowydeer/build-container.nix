@@ -9,6 +9,7 @@
   tini,
   cacert,
   bash,
+  iproute2,
   coreutils,
   curl,
 }:
@@ -31,6 +32,7 @@ let
     bash
     coreutils
     curl
+    iproute2
     # So that TLS works
     cacert
   ];
