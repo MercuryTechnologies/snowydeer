@@ -383,6 +383,54 @@ final: [
     excludes = [ "testsuite/**" ];
   })
 
+  # Expose compileWholeCoreBindings
+  # In HEAD: Not yet.
+  (final.fetchpatch {
+    url = "https://github.com/MercuryTechnologies/ghc/commit/690a4eb36975cb2baa7583e821b2199557ee4347.diff";
+    hash = "sha256-7eu2Sesd5yT32i3iX6WXCOzHhojjFce8L3oKRTrw9pU=";
+    excludes = [ "testsuite/**" ];
+  })
+
+  # Don't store boot locations in finder cache
+  # In HEAD: Yes (GHC 9.14)
+  (final.fetchpatch {
+    url = "https://github.com/MercuryTechnologies/ghc/commit/dab5efd55c94e8ecb84531e6b7f4a462f263798a.diff";
+    hash = "sha256-JUWu0KhT4HKeEJzWNQ9xk/7Rus+S1WW+UyQeix3bTKg=";
+    excludes = [ "testsuite/**" ];
+  })
+
+  # Concentrate boot extension logic in Finder
+  # In HEAD: Yes (GHC 9.14)
+  (final.fetchpatch {
+    url = "https://github.com/MercuryTechnologies/ghc/commit/96c91833fbcce68d55b358c6809a9bc4968ddb8b.diff";
+    hash = "sha256-9JwZAxbLgXHpbtZqJ2O4+/r4YQ+q0xjnS98QYi61nK0=";
+    excludes = [ "testsuite/**" ];
+  })
+
+  # Fixed node
+  # In HEAD: Yes (GHC 9.14)
+  (final.fetchpatch {
+    url = "https://github.com/MercuryTechnologies/ghc/commit/58ed6b6879b957bd5ffe462abe6e29e20ad04434.diff";
+    hash = "sha256-b6m9FXvOHQqqCp7AXBNaZ+RpbzLdWPgS3u2N9xbyVLE=";
+    excludes = [ "testsuite/**" ];
+  })
+
+  # WIP Abstract getLinkDeps
+  # In HEAD: Not yet.
+  (final.fetchpatch {
+    url = "https://github.com/MercuryTechnologies/ghc/commit/e11740a9f4b2139b84dfc0a4bf25ca3f88568c77.diff";
+    hash = "sha256-uvKYJd1LK+LEM+3YhQ3qpeEip/d2byzTmA0mICiZVRE=";
+    excludes = [ "testsuite/**" ];
+  })
+
+  # WIP Make extra_decls lazy when loading from Binary
+  # In HEAD: Not yet.
+  (final.fetchpatch {
+    url = "https://github.com/MercuryTechnologies/ghc/commit/3e585353e5de4680fc2fcabc3b0b8d396071985f.diff";
+    hash = "sha256-8D6PNtcfVV1QA3Y7kwMZq6PVEkCDqlEqd8RRoY2g1cg=";
+    excludes = [ "testsuite/**" ];
+  })
+
   ./haddock-ghc9101-mem-improv-backport.patch
 
   ./haddock-ghc9101-det-iface-re-export.patch
@@ -397,5 +445,8 @@ final: [
   ./haddock-ghc9101-do-not-load-in-attachInstances-in-one-shot-mode.patch
 
   ./haddock-ghc9101-dynFlags-with-extensions-set-in-source.patch
+
+  # fixed nodes in GHC 9.14
+  ./haddock-ghc9101-fixed-nodes.patch
 
 ]

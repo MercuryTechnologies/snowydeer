@@ -2,6 +2,7 @@
 -- SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
 --
 -- SPDX-License-Identifier: MIT OR Apache-2.0
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 -- | Container builder for Snowydeer.
@@ -11,14 +12,26 @@
 module Snowydeer.Container.Application
   ( -- * Build plans
     InputPath (..),
+    BaseImageSpec (..),
     GitRevInfo (..),
     BuildPlan (..),
     buildPlanMetadataL,
     buildPlanContentsL,
     ExportBuildPlan (..),
 
+    -- * Base image update spec
+    BaseImageUpdateSpec (..),
+    ImageRef (..),
+    NixPrefetchDockerArgs (..),
+    PrefetchResult (..),
+
     -- * Building a plan
     planify,
+
+    -- * Base image update
+    validateBaseImage,
+    updateBaseImage,
+    lockBaseImage,
 
     -- * App
     AppM,
@@ -74,6 +87,79 @@ instance A.ToJSON InputPath where
   toJSON (InputBuckTarget t) = A.String t
   toJSON (InputStorePath p) = A.String p.unStorePath
 
+-- | A pinned third-party base image to build a container on top of.
+--
+-- Pure passthrough from the @snowydeer_base_image@ Buck rule to the Nix
+-- container builder, which turns it into @streamLayeredImage@'s @fromImage@ via
+-- @dockerTools.pullImage@. The pin is already resolved to the active
+-- architecture; @system@ (the Nix system double, e.g. @x86_64-linux@) lets the
+-- Nix side derive the Docker os/arch.
+data BaseImageSpec = BaseImageSpec
+  { imageName :: Text
+  -- ^ Registry path, e.g. @someregistry.com/jetbrains/youtrack@.
+  , system :: Text
+  -- ^ Nix system double, e.g. @x86_64-linux@.
+  , imageDigest :: Text
+  -- ^ OCI image digest, @sha256:…@.
+  , narHash :: Text
+  -- ^ SRI nar hash (@sha256-…@), serialized as @hash@ to match
+  -- @nix-prefetch-docker@ / @dockerTools.pullImage@.
+  }
+  deriving stock (Show, Eq)
+
+$( A.deriveJSON
+     A.defaultOptions {A.fieldLabelModifier = \f -> if f == "narHash" then "hash" else f}
+     ''BaseImageSpec
+ )
+
+-- | The update/validate spec written by the @snowydeer_base_image@ Buck rule
+-- as @base_image_spec.json@. Contains a single digest for a multiarch image
+-- (hash of the manifest listing all the per-arch digests) and per-arch NAR
+-- hashes (the pulled content differs by arch).
+data BaseImageUpdateSpec = BaseImageUpdateSpec
+  { imageName :: Text
+  , followsTag :: Maybe Text
+  , label :: Text
+  -- ^ Buck target label, e.g. @root//snowydeer/demo:base@.  Used by buildozer.
+  , activeSystem :: Text
+  , imageDigest :: Text
+  -- ^ OCI manifest-list digest, @sha256:…@.  One value for all arches.
+  , narHashes :: HashMap Text Text
+  -- ^ Per-arch SRI nar hashes keyed by Nix system double, e.g. @x86_64-linux@.
+  }
+  deriving stock (Show, Eq)
+
+$(A.deriveJSON A.defaultOptions ''BaseImageUpdateSpec)
+
+-- | Output from @nix-prefetch-docker --json@.
+data PrefetchResult = PrefetchResult
+  { imageName :: Text
+  , imageDigest :: Text
+  , hash :: Text
+  -- ^ SRI nar hash, @sha256-…@.
+  , finalImageName :: Text
+  , finalImageTag :: Text
+  }
+  deriving stock (Show, Eq)
+
+$(A.deriveJSON A.defaultOptions ''PrefetchResult)
+
+data ImageRef
+  = -- | Fetch by tag (for @update@).
+    ImageTag Text
+  | -- | Fetch by digest (for @lock@; updates the NAR hash for the pinned digest).
+    ImageDigest Text
+  deriving stock (Show, Eq)
+
+-- | Arguments for a @nix-prefetch-docker@ invocation.
+data NixPrefetchDockerArgs = NixPrefetchDockerArgs
+  { os :: Text
+  , dockerArch :: Text
+  , imageName :: Text
+  , imageRef :: ImageRef
+  }
+  deriving stock (Show, Eq)
+
 -- | Build plan as viewed by Snowydeer Container.
 --
 -- Snowydeer Container needs to validate the metadata entries it is responsible
@@ -108,6 +194,10 @@ data BuildPlan metadataType contentType = BuildPlan
   , metadata :: metadataType
   -- ^ Metadata on the image in
   -- [OCI-compliant format](https://specs.opencontainers.org/image-spec/annotations/?v=v1.1.1).
+  , baseImage :: Maybe BaseImageSpec
+  -- ^ Optional pinned third-party base image to build on top of. Absent for
+  -- ordinary first-party images; passed through to the Nix container builder
+  -- when present.
   }
   deriving stock (Show, Eq)
 
@@ -180,6 +270,8 @@ type AppM = RIO App
 data Stubs = Stubs
   { doTargetsToNix :: [Text] -> AppM [StorePath]
   , doGitRevInfo :: AppM GitRevInfo
+  , doNixPrefetchDocker :: NixPrefetchDockerArgs -> AppM PrefetchResult
+  , doNixBuild :: Text -> HashMap Text Text -> AppM LByteString
   }
 
 data App = App
@@ -216,23 +308,12 @@ buildRealPlan plan = do
 data ImageBuildMode = Upload Text | BuildOnly
   deriving stock (Show)
 
-nixBuildContainer :: RequireCallStack => ExportBuildPlan -> AppM StorePath
+nixBuildContainer :: ExportBuildPlan -> AppM StorePath
 nixBuildContainer plan = do
-  proc
-    "nix"
-    [ "build"
-    , "-f"
-    , "."
-    , "--print-build-logs"
-    , "--print-out-paths"
-    , "pkgs.mercury.snowydeer.build-container"
-    , "--argstr"
-    , "buildPlanJSON"
-    , planToArg plan
-    ]
-    $ fmap (StorePath . T.strip . TE.decodeUtf8 . BS.toStrict) . readProcessStdout_
+  out <- nixBuild "pkgs.mercury.snowydeer.build-container" (HashMap.singleton "buildPlanJSON" planJson)
+  pure . StorePath . T.strip . TE.decodeUtf8 . BS.toStrict $ out
   where
-    planToArg = T.unpack . TE.decodeUtf8 . BS.toStrict . A.encode
+    planJson = TE.decodeUtf8 . BS.toStrict . A.encode $ plan
 
 data DockerImageId
   = DockerTag Text Text
@@ -287,11 +368,11 @@ uploadToRegistry skopeo streamer registryPath tags = do
         runProcess_
 
 preprocessPlan :: Ord contentType => GitRevInfo -> BuildPlan UncheckedMetadata contentType -> BuildPlan UncheckedMetadata contentType
-preprocessPlan gitInfo plan =
+preprocessPlan gitInfo@GitRevInfo {revision} plan =
   over buildPlanMetadataL (attachGitInfo gitInfo)
     -- Prevent a footgun: if you omit something from contents that's in mainContents it will get in the image no matter what.
     . over buildPlanContentsL (\old -> ordNub (plan.mainContents <> old))
-    $ plan
+    $ plan {env = HashMap.insert "GIT_SHA1" revision plan.env}
 
 -- | Top level planning function. Takes a plan from the Buck rule and turns it
 -- into an exportable plan ready for Nix to build.
@@ -303,35 +384,174 @@ planify gitInfo plan0 = do
 
   pure ExportBuildPlan {layeringPipeline = pipeline, plan}
 
+findRepoRoot :: AppM FilePath
+findRepoRoot = T.unpack . T.strip . decodeUtf8Lenient . toStrictBytes <$> proc "buck" ["root"] readProcessStdout_
+
+-- | Parses a file and throws if there's a problem with it
+throwDecodeFileStrict :: A.FromJSON a => FilePath -> IO a
+throwDecodeFileStrict p =
+  A.eitherDecodeFileStrict p
+    >>= either (throwString . (("problem decoding file " <> p <> ": ") <>)) pure
+
+-- | Derive Docker (os, arch) pull coordinates from a Nix system double.
+-- FIXME(jadel): there's a bunch of duplication of this data including in both
+-- pull-base-image.nix and build-container.nix.
+--
+-- @
+-- "x86_64-linux" -> ("linux", "amd64")
+-- "aarch64-linux" -> ("linux", "arm64")
+-- @
+archOf :: Text -> Either String (Text, Text)
+archOf sys = case T.splitOn "-" sys of
+  [arch, os] -> case arch of
+    "x86_64" -> Right (os, "amd64")
+    "aarch64" -> Right (os, "arm64")
+    _ -> Left $ "unknown arch in system double: " <> T.unpack sys
+  _ -> Left $ "invalid Nix system double: " <> T.unpack sys
+
+-- | Run `nix build -f . <attr>` with @--argstr@ pairs; returns stdout.
+nixBuild :: Text -> HashMap Text Text -> AppM LByteString
+nixBuild attr argstrs =
+  proc "nix" (["build", "-f", ".", "--print-build-logs", "--print-out-paths", T.unpack attr] <> flatArgstrs) readProcessStdout_
+  where
+    flatArgstrs = concatMap (\(k, v) -> ["--argstr", T.unpack k, T.unpack v]) (HashMap.toList argstrs)
+
+-- | Pull every pinned arch from a @base_image_spec.json@.
+-- Runs `nix build pkgs.mercury.snowydeer.pull-base-image` for each pin; a hash
+-- mismatch or unresolvable digest makes nix fail, propagating the error. Writes
+-- the @--out@ marker file on full success so Buck knows the action completed.
+validateBaseImage :: FilePath -> FilePath -> AppM ()
+validateBaseImage specPath outPath = do
+  spec <- liftIO (throwDecodeFileStrict @BaseImageUpdateSpec specPath)
+  when (HashMap.null spec.narHashes) $
+    throwString $
+      "narHashes is empty for " <> T.unpack spec.label <> "; add at least one arch to the snowydeer_base_image rule with empty hash then run `buck run " <> T.unpack spec.label <> " -- lock`"
+  nixBuild' <- asksStub doNixBuild
+  forM_ (HashMap.toList spec.narHashes) \(system, narHash) -> do
+    logInfo $ "Validating pin for " <> display system
+    void $
+      nixBuild'
+        "pkgs.mercury.snowydeer.pull-base-image"
+        (HashMap.fromList [("imageName", spec.imageName), ("imageDigest", spec.imageDigest), ("hash", narHash), ("system", system)])
+  liftIO $ TIO.writeFile outPath "OK\n"
+
+realNixPrefetchDocker :: FilePath -> NixPrefetchDockerArgs -> AppM PrefetchResult
+realNixPrefetchDocker nixPrefetchDockerExe args = do
+  resultLbs <-
+    proc
+      nixPrefetchDockerExe
+      ( [ "--os"
+        , T.unpack args.os
+        , "--arch"
+        , T.unpack args.dockerArch
+        , "--image-name"
+        , T.unpack args.imageName
+        ]
+          <> refArgs args.imageRef
+          <> [ "--final-image-name"
+             , T.unpack args.imageName
+             , "--final-image-tag"
+             , "pinned"
+             , "--json"
+             ]
+      )
+      readProcessStdout_
+  either (throwString . ("nix-prefetch-docker: bad output: " <>)) pure $
+    A.eitherDecode @PrefetchResult resultLbs
+  where
+    refArgs (ImageTag tag) = ["--image-tag", T.unpack tag]
+    refArgs (ImageDigest digest) = ["--image-digest", T.unpack digest]
+
+-- | Fetch every arch via @doNixPrefetchDocker@ and write
+-- @nar_hashes@.
+--
+-- When @imageRef@ is 'ImageTag', also writes @digest@ corresponding to a new
+-- version of the tag; 'ImageDigest' leaves it alone.
+pinBaseImage :: FilePath -> BaseImageUpdateSpec -> ImageRef -> AppM ()
+pinBaseImage buildozerExe spec imageRef = do
+  when (HashMap.null spec.narHashes) $
+    throwString "narHashes is empty; add at least one arch to the snowydeer_base_image rule"
+
+  nixPrefetchDocker <- asksStub doNixPrefetchDocker
+  repoRoot <- findRepoRoot
+
+  results <- forConcurrently (HashMap.toList spec.narHashes) \(system, _) -> do
+    (os, dockerArch) <- either throwString pure (archOf system)
+    logInfo $ "Fetching pin for " <> display system
+    result <- nixPrefetchDocker NixPrefetchDockerArgs {os, dockerArch, imageName = spec.imageName, imageRef}
+    pure (system, result)
+
+  let narHashCmds = ["dict_set nar_hashes " <> system <> ":" <> result.hash | (system, result) <- results]
+  digestCmds <- case imageRef of
+    ImageTag _ -> do
+      let digests = ordNub $ map ((.imageDigest) . snd) results
+      case digests of
+        [d] -> pure ["set digest \"" <> d <> "\""]
+        _ -> throwString $ "per-arch digests disagree for " <> T.unpack spec.label <> " (expected a single manifest-list digest): " <> T.unpack (T.intercalate ", " digests)
+    ImageDigest _ -> pure []
+  let cmds = map T.unpack (narHashCmds <> digestCmds)
+
+  exitCode <- proc buildozerExe (["-root_dir", repoRoot] <> cmds <> [T.unpack spec.label]) runProcess
+  case exitCode of
+    ExitSuccess -> pure ()
+    ExitFailure 3 -> pure () -- buildozer exit 3 means no-op (nothing changed)
+    ExitFailure n -> throwString $ "buildozer exited with code " <> show n
+
+updateBaseImage :: FilePath -> FilePath -> AppM ()
+updateBaseImage buildozerExe specPath = do
+  spec <- liftIO (throwDecodeFileStrict @BaseImageUpdateSpec specPath)
+  followsTag <- case spec.followsTag of
+    Nothing -> throwString "update: followsTag is required; set it in the snowydeer_base_image rule"
+    Just t -> pure t
+  pinBaseImage buildozerExe spec (ImageTag followsTag)
+
+lockBaseImage :: FilePath -> FilePath -> AppM ()
+lockBaseImage buildozerExe specPath = do
+  spec <- liftIO (throwDecodeFileStrict @BaseImageUpdateSpec specPath)
+  when (T.null spec.imageDigest) $
+    throwString "lock: imageDigest is empty; run update first or set it manually"
+  pinBaseImage buildozerExe spec (ImageDigest spec.imageDigest)
+
 app :: Opts -> AppM ()
 app opts = provideCallStack do
-  gitInfo <- Monad.join (asksStub doGitRevInfo)
-  planJson <-
-    (either (throwWithCallStack . AesonDecodeError) pure)
-      =<< liftIO (A.eitherDecodeFileStrict @(BuildPlan UncheckedMetadata InputPath) (T.unpack opts.buildPlan))
-
-  plan <- planify gitInfo planJson
-
-  storePath <- nixBuildContainer plan
-  case opts.task of
-    DoBuild -> pure ()
-    -- Forces the docker-tarball-only import tag name to "latest" for good UX:
-    -- you can rerun `podman run glean_container:latest` repeatedly without
-    -- having to copy a hash.
-    DoSave -> proc (T.unpack storePath.unStorePath) ["--repo_tag", T.unpack plan.plan.name <> ":latest"] runProcess_
-    DoPush push -> do
+  case opts.subcommand of
+    BaseImage specPath DoUpdateBaseImage ->
+      updateBaseImage opts.buildozerExe specPath
+    BaseImage specPath DoLockBaseImage ->
+      lockBaseImage opts.buildozerExe specPath
+    BaseImage specPath (DoValidateBaseImage outPath) ->
+      validateBaseImage specPath outPath
+    Builder buildPlan DoBuild ->
+      void (buildContainer buildPlan)
+    Builder buildPlan DoSave -> do
+      (plan, _, storePath) <- buildContainer buildPlan
+      -- Forces the docker-tarball-only import tag name to "latest" for good UX:
+      -- you can rerun `podman run glean_container:latest` repeatedly without
+      -- having to copy a hash.
+      proc (T.unpack storePath.unStorePath) ["--repo_tag", T.unpack plan.plan.name <> ":latest"] runProcess_
+    Builder buildPlan (DoPush push) -> do
+      (_, gitInfo, storePath) <- buildContainer buildPlan
       let tags = tagsFromGit gitInfo <> push.extraTags
       pushed <- uploadToRegistry opts.skopeoExe storePath push.registryLocation tags
-
       logInfo $ "Pushed:\n" <> display (T.unlines . fmap (("- " <>) . textDisplay) $ pushed)
   where
     tagsFromGit gitInfo = [gitInfo.revision]
+    buildContainer buildPlan = provideCallStack do
+      gitInfo <- Monad.join (asksStub doGitRevInfo)
+      planJson <-
+        (either (throwWithCallStack . AesonDecodeError) pure)
+          =<< liftIO (A.eitherDecodeFileStrict @(BuildPlan UncheckedMetadata InputPath) buildPlan)
+      plan <- planify gitInfo planJson
+      storePath <- nixBuildContainer plan
+      pure (plan, gitInfo, storePath)
 
-realStubs :: Stubs
-realStubs =
+realStubs :: FilePath -> Stubs
+realStubs nixPrefetchDockerExe =
   Stubs
     { doTargetsToNix = realTargetsToNix
     , doGitRevInfo = realGitRevInfo
+    , doNixPrefetchDocker = realNixPrefetchDocker nixPrefetchDockerExe
+    , doNixBuild = nixBuild
     }
 
 defaultConfig :: SnowydeerConfig
@@ -348,4 +568,4 @@ main = do
   logOpts <- logOptionsHandle stderr opts.verbose
   processContext <- mkDefaultProcessContext
   withLogFunc logOpts \logFunc ->
-    runRIO (App {logFunc, processContext, stubs = realStubs, config = defaultConfig}) (app opts)
+    runRIO (App {logFunc, processContext, stubs = realStubs opts.nixPrefetchDockerExe, config = defaultConfig}) (app opts)

@@ -24,7 +24,13 @@ def _record_nix_path_dynamic_impl(actions, arg, pkg_deps, list_of_packages):
         out_link = package_db[k].value.path
         cmd.add("--input", out_link)
 
-    actions.run(cmd, category = "all_nix_packages")
+    actions.run(
+        cmd,
+        category = "all_nix_packages",
+        # nix store paths
+        allow_cache_upload = False,
+        local_only = True,
+    )
     return []
 
 _record_nix_path_dynamic = dynamic_actions(
@@ -74,7 +80,13 @@ def _upload_haskell_nix_dynamic_impl(actions: AnalysisActions, arg: typing.Any, 
     summarize_args.append(input_args)
 
     cmd = cmd_args(summarize_args, "--output", summary_upload_status)
-    actions.run(cmd, category = "update_nix_cache_summary")
+    actions.run(
+        cmd,
+        category = "update_nix_cache_summary",
+        # nix store paths
+        allow_cache_upload = False,
+        local_only = True,
+    )
 
     return []
 
@@ -87,7 +99,7 @@ _upload_haskell_nix_dynamic = dynamic_actions(
     },
 )
 
-def _mercury_haskell_toolchain_all_impl(ctx: AnalysisContext) -> list[Provider]:
+def _haskell_toolchain_all_impl(ctx: AnalysisContext) -> list[Provider]:
     haskell_toolchain = ctx.attrs.toolchain[HaskellToolchainInfo]
     list_of_packages = ctx.actions.declare_output("all_haskell_nix_paths.txt")
     summary_upload_status = ctx.actions.declare_output("summary_upload_status.txt")
@@ -120,8 +132,8 @@ def _mercury_haskell_toolchain_all_impl(ctx: AnalysisContext) -> list[Provider]:
         ),
     ]
 
-mercury_haskell_toolchain_all = rule(
-    impl = _mercury_haskell_toolchain_all_impl,
+haskell_toolchain_all = rule(
+    impl = _haskell_toolchain_all_impl,
     attrs = {
         "_cache_hook": attrs.dep(
             providers = [RunInfo],

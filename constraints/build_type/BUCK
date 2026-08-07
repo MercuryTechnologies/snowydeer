@@ -2,20 +2,12 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-constraint_setting(
+constraint(
     name = "build_type",
-    visibility = ["PUBLIC"],
-)
-
-constraint_value(
-    name = "release",
-    constraint_setting = ":build_type",
-    visibility = ["PUBLIC"],
-)
-
-# Build with -O0. This is the default.
-constraint_value(
-    name = "debug",
-    constraint_setting = ":build_type",
+    default = "debug",
+    values = [
+        "debug",
+        "release",
+    ],
     visibility = ["PUBLIC"],
 )

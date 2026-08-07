@@ -7,6 +7,7 @@ Tools for building Docker images with Buck2 via Nix.
 """
 
 load("@toolchains//nix/nix_build.bzl", "NixDynamicDepsTset", "NixDynamicInfo", "NixPathInfo")
+load("//snowydeer:base_image.bzl", "SnowydeerBaseImageInfo")
 # @moss-disable[end= ]: load("//snowydeer/container:mercury_attrs.bzl", "buck_path_to_url", "extract_mercury_metadata", "mercury_metadata_attrs")
 
 mercury_metadata_attrs = lambda: {}  # @moss-enable
@@ -107,6 +108,19 @@ def _container_impl(ctx: AnalysisContext):
             "org.opencontainers.image.source": buck_path_to_url(ctx.label),
         } | extract_mercury_metadata(ctx.attrs),
     }
+
+    # Optional third-party base image. The target machine's nar hash passes
+    # straight through to the build plan; the Nix builder turns it into
+    # `streamLayeredImage`'s `fromImage`.
+    if ctx.attrs.base_image != None:
+        base = ctx.attrs.base_image[SnowydeerBaseImageInfo]
+        static_part["baseImage"] = {
+            "imageName": base.image_name,
+            "system": base.system,
+            "imageDigest": base.digest,
+            "hash": base.nar_hash,
+        }
+
     contents_result = partition_deps(None, ctx.attrs.contents)
     main_contents_result = partition_deps(contents_result, ctx.attrs.main_contents)
 
@@ -127,6 +141,7 @@ def _container_impl(ctx: AnalysisContext):
             "set -euo pipefail",
             cmd_args(
                 build_container,
+                "builder",
                 cmd_args(build_plan, quote = "shell"),
                 "\"$@\"",
                 delimiter = " ",
@@ -148,6 +163,7 @@ snowydeer_container = rule(
         "contents": attrs.list(attrs.dep(), default = [], doc = "What to put in the root of the image"),
         "main_contents": attrs.list(attrs.dep(), doc = "What to promote to its own layers in the image"),
         "ports": attrs.list(attrs.string(), default = [], doc = "Ports to expose, e.g. '9000/tcp'"),
+        "base_image": attrs.option(attrs.dep(providers = [SnowydeerBaseImageInfo]), default = None, doc = "Optional pinned third-party base image to build on top of"),
         "_build_container": attrs.dep(default = "//snowydeer/container"),
     } | mercury_metadata_attrs(),
 )

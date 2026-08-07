@@ -18,6 +18,7 @@ load(
     "LinkerInfo",
     "LinkerType",
     "PicBehavior",
+    "RuntimeDependencyHandling",
     "ShlibInterfacesMode",
 )
 load("@prelude//cxx:headers.bzl", "HeaderMode")
@@ -137,6 +138,8 @@ def _nix_cxx_toolchain(ctx: AnalysisContext) -> list[Provider]:
             pic_behavior = pic_behavior,
             llvm_link = llvm_link,
             internal_tools = ctx.attrs._internal_tools[CxxInternalTools],
+            # https://github.com/facebook/buck2-prelude/blob/f184f677e6a11579ee29ba126810833cf904ce6e/cxx/cxx_toolchain_types.bzl#L227-L236
+            runtime_dependency_handling = RuntimeDependencyHandling("no_symlink"),
         ),
         CxxPlatformInfo(name = "aarch64" if host_info().arch.is_aarch64 else "x86_64"),
     ]

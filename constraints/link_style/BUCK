@@ -2,26 +2,20 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-constraint_setting(
+constraint(
     name = "link_style",
-    visibility = ["PUBLIC"],
-)
-
-constraint_value(
-    name = "static_pic",
-    constraint_setting = ":link_style",
+    default = "auto",
+    values = [
+        "auto",
+        "shared",
+        "static_pic",
+    ],
     visibility = ["PUBLIC"],
 )
 
 # N.B. This means static_pic in practice. We do not support non-PIC static
 # linking because it is at odds with modern security mitigations like ASLR.
-alias(
+configuration_alias(
     name = "static",
-    actual = ":static_pic",
-)
-
-constraint_value(
-    name = "shared",
-    constraint_setting = ":link_style",
-    visibility = ["PUBLIC"],
+    actual = ":link_style[static_pic]",
 )

@@ -6,6 +6,8 @@ command_alias(
     name = "container",
     args = [
         "--skopeo-exe=$(exe toolchains//:skopeo)",
+        "--nix-prefetch-docker-exe=$(exe toolchains//:nix-prefetch-docker)",
+        "--buildozer-exe=$(exe toolchains//:buildifier[buildozer])",
     ],
     exe = "//snowydeer/container/src/Snowydeer/Container:container_unwrapped",
     # used by //snowydeer:container.bzl

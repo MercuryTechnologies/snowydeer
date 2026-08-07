@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 load("@buck2-haskell//:defs.bzl", "haskell_toolchain_library")
-load("@toolchains//:haskell_all.bzl", "mercury_haskell_toolchain_all")
+load("@toolchains//:haskell_all.bzl", "haskell_toolchain_all")
 load("@toolchains//:libs.bzl", "toolchain_libraries")
 
 [haskell_toolchain_library(
@@ -17,7 +17,7 @@ load("@toolchains//:libs.bzl", "toolchain_libraries")
 # dependency closure and updating cache is very useful, and we support that workflow
 # fully internalized in Buck2, reducing the potential errors.
 
-mercury_haskell_toolchain_all(
+haskell_toolchain_all(
     name = "all",
     toolchain = "@toolchains//:haskell",
 )

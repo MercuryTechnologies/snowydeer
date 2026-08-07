@@ -6,7 +6,7 @@
 Uploads Nix store paths to the cache.
 """
 
-load(":nix_build.bzl", "NixDynamicInfo", "NixPathInfo")
+load(":nix_build.bzl", "NixDynamicInfo", "NixPathInfo", "collect_all_nix_output_dynamics_for_target")
 
 # Upload the Nix packages to designated Nix cache.
 # Script is provided by pkgs.mercury.cache-hook.
@@ -27,7 +27,7 @@ def upload_to_cache(
     cmd.add("--hook", cache_hook)
     cmd.add("--input", batch_items)
     cmd.add("--output", upload_status.as_output())
-    actions.run(cmd, category = "update_nix_cache", identifier = batch_name)
+    actions.run(cmd, category = "update_nix_cache", identifier = batch_name, allow_cache_upload = False, local_only = True)
     return upload_status
 
 # FIXME(jadel): some duplicate logic in toolchain/nix_build.bzl; should all be
@@ -50,7 +50,15 @@ _dump_nix_paths_dynamic = dynamic_actions(
 )
 
 def _flake_nix_paths_impl(ctx: AnalysisContext) -> list[Provider]:
-    dyn_nix_paths = [flake[NixDynamicInfo].dynamic for flake in ctx.attrs.flakes]
+    # Upload every output a flake target built, not just its default one: a
+    # `nix_build` with `outputs = ["out", "dev"]` whose `dev` is missing from the
+    # cache makes the *whole* derivation a cold build on the next machine.
+    #
+    # `flakes` constrains its deps to provide `NixDynamicInfo`, so this is
+    # never empty.
+    dyn_nix_paths = []
+    for flake in ctx.attrs.flakes:
+        dyn_nix_paths.extend(collect_all_nix_output_dynamics_for_target(flake))
     list_of_packages = ctx.actions.declare_output("all_flake_nix_paths.txt")
 
     ctx.actions.dynamic_output_new(_dump_nix_paths_dynamic(

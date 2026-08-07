@@ -11,9 +11,10 @@ import RIO hiding (error)
 
 data Opts = Opts
   { skopeoExe :: FilePath
-  , buildPlan :: Text
+  , nixPrefetchDockerExe :: FilePath
+  , buildozerExe :: FilePath
   , verbose :: Bool
-  , task :: Task
+  , subcommand :: Subcommand
   }
   deriving stock (Show)
 
@@ -23,7 +24,21 @@ data PushOpts = PushOpts
   }
   deriving stock (Show)
 
-data Task = DoPush PushOpts | DoBuild | DoSave
+data BuildCommand
+  = DoPush PushOpts
+  | DoBuild
+  | DoSave
+  deriving stock (Show)
+
+data BaseImageCommand
+  = DoValidateBaseImage FilePath
+  | DoUpdateBaseImage
+  | DoLockBaseImage
+  deriving stock (Show)
+
+data Subcommand
+  = Builder FilePath BuildCommand
+  | BaseImage FilePath BaseImageCommand
   deriving stock (Show)
 
 parsePush :: Parser PushOpts
@@ -32,14 +47,41 @@ parsePush = do
   extraTags <- many (strOption (long "extra-tag" <> help "Extra tag to upload the image with"))
   pure PushOpts {..}
 
-subcmds :: Parser Task
-subcmds =
+parseValidate :: Parser BaseImageCommand
+parseValidate = do
+  outPath <- strOption (long "out" <> metavar "FILE" <> help "Path to write the validation marker file on success")
+  pure (DoValidateBaseImage outPath)
+
+buildSubcmds :: Parser BuildCommand
+buildSubcmds =
   hsubparser $
     command "push" (info (fmap DoPush parsePush) (progDesc "Push an image to a registry"))
       <> command "build" (info (pure DoBuild) (progDesc "Build an image without pushing it"))
       <> command "save" (info (pure DoSave) (progDesc "Spit out the image as a tarball on stdout for podman load, for running locally"))
 
-options :: ParserInfo (Opts)
+baseImageSubcmds :: Parser BaseImageCommand
+baseImageSubcmds =
+  hsubparser $
+    command "validate" (info parseValidate (progDesc "Pull-validate the pinned base image"))
+      <> command "update" (info (pure DoUpdateBaseImage) (progDesc "Re-pin the base image to its follows_tag via nix-prefetch-docker"))
+      <> command "lock" (info (pure DoLockBaseImage) (progDesc "Re-derive nar hashes for all arches using the existing pinned digest"))
+
+subcmds :: Parser Subcommand
+subcmds =
+  hsubparser $
+    command "builder" (info builderParser (progDesc "Build or push a container image from a build plan"))
+      <> command "base-image" (info baseImageParser (progDesc "Validate or update a pinned base image"))
+  where
+    builderParser = do
+      buildPlan <- strArgument (metavar "BUILD-PLAN" <> help "Path to a build plan JSON file")
+      cmd <- buildSubcmds
+      pure (Builder buildPlan cmd)
+    baseImageParser = do
+      specPath <- strArgument (metavar "IMAGE-SPEC" <> help "Path to a base_image_spec.json file")
+      cmd <- baseImageSubcmds
+      pure (BaseImage specPath cmd)
+
+options :: ParserInfo Opts
 options =
   info
     (parser <**> helper)
@@ -50,7 +92,8 @@ options =
   where
     parser = do
       skopeoExe <- strOption (long "skopeo-exe" <> value "skopeo" <> help "Path to a skopeo executable. Defaults to looking in PATH")
-      buildPlan <- strArgument (metavar "BUILD-PLAN" <> help "Path to a build plan for the container")
-      verbose <- switch (short 'v' <> long "verbose" <> help "Where to upload the image to")
-      task <- subcmds
+      nixPrefetchDockerExe <- strOption (long "nix-prefetch-docker-exe" <> value "nix-prefetch-docker" <> help "Path to nix-prefetch-docker. Defaults to looking in PATH")
+      buildozerExe <- strOption (long "buildozer-exe" <> value "buildozer" <> help "Path to buildozer. Defaults to looking in PATH")
+      verbose <- switch (short 'v' <> long "verbose" <> help "Enable verbose logging")
+      subcommand <- subcmds
       pure Opts {..}

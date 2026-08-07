@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Buck2 code generation tool for Python dependencies
+[cells]
+elk = elk
+
+[external_cells]
+elk = git
+
+[external_cell_elk]
+git_origin = https://github.com/mercurytechnologies/elk
+# Allow using our downloader: https://github.com/cormacrelf/elk/pull/5
+commit_hash = 3e96ef9e2faeabaa6837bcb29995d5de6d727db4

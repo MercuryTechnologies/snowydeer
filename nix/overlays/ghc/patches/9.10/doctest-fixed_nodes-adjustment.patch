@@ -1,0 +1,26 @@
+diff -rupN a/src/Extract.hs b/src/Extract.hs
+--- a/src/Extract.hs	2001-09-08 18:46:40.000000000 -0700
++++ b/src/Extract.hs	2026-07-10 10:21:53.144286541 -0700
+@@ -96,9 +96,7 @@ parse args = withGhc args $ \modules_ ->
+   mods <- depanal [] False
+ 
+   let sortedMods =
+-#if __GLASGOW_HASKELL__ >= 914
+                    mapMaybe maybeModSummaryFromModuleNodeInfo $
+-#endif
+                    flattenSCCs
+ #if __GLASGOW_HASKELL__ >= 901
+                      $ filterToposortToModules
+@@ -195,12 +193,10 @@ extractFromModule m = Module name (listT
+     (setup, docs) = partition isSetup (docStringsFromModule m)
+     name = (moduleNameString . GHC.moduleName . ms_mod . pm_mod_summary) m
+ 
+-#if __GLASGOW_HASKELL__ >= 914
+ maybeModSummaryFromModuleNodeInfo :: ModuleNodeInfo -> Maybe ModSummary
+ maybeModSummaryFromModuleNodeInfo i = case i of
+   ModuleNodeCompile summary -> Just summary
+   ModuleNodeFixed _ _ -> Nothing
+-#endif
+ 
+ #if __GLASGOW_HASKELL__ >= 904
+ unpackHDS :: HsDocString -> String

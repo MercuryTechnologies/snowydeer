@@ -13,14 +13,14 @@ load(
     "GhcLinkableInfo",
 )
 load("@prelude//cxx:cxx_context.bzl", "get_cxx_toolchain_info")
-load(
-    "@prelude//cxx:cxx_library_utility.bzl",
-    "cxx_attr_exported_linker_flags",
-)
+load("@prelude//cxx:cxx_toolchain_types.bzl", "LinkerType")
 load(
     "@prelude//cxx:preprocessor.bzl",
+    "CPreprocessor",
+    "CPreprocessorArgs",
     "cxx_inherited_preprocessor_infos",
     "cxx_merge_cpreprocessors",
+    "format_system_include_arg",
 )
 load("@prelude//decls:cxx_common.bzl", "cxx_common")
 load("@prelude//linking:link_groups.bzl", "merge_link_group_lib_info")
@@ -45,7 +45,6 @@ load(
     "SharedLibraries",
     "SharedLibraryInfo",
     "create_shlib_from_ctx",
-    "extract_soname_from_shlib",
     "merge_shared_libraries",
     "to_soname",
 )
@@ -71,6 +70,90 @@ _write_rpath_ld_args = dynamic_actions(
         "output": dynattrs.output(),
     },
 )
+
+def _symlink_into_nix_output(
+        ctx: AnalysisContext,
+        out_link: Artifact,
+        relative_path: str,
+        output_name: str,
+        category: str) -> Artifact:
+    """
+    Turn an out-link plus a path relative to the Nix output it points at into a
+    buck-out artifact symlinked at the absolute store path.
+    """
+
+    # Hmmm. This feels kinda nasty but I think it's fine? I guess we might want
+    # to replace it with Buck2-built Bash and `readlink` at some point.
+    #
+    # Note: There's two reasons we use `bash` to run `readlink` instead of
+    # using `out_link.project`. The first is that the `Artifact.project`
+    # method hard-errors if you attempt to use it on a symlink. The second
+    # is that having a link to an absolute path is nice.
+    #
+    # `ln -s` happily creates a dangling link, and a dangling link is a
+    # perfectly cacheable action result, so we check it to catch mistakes
+    # early.
+    output = ctx.actions.declare_output(output_name)
+    ctx.actions.run(
+        cmd_args(
+            "bash",
+            "-ec",
+            """
+            target="$(readlink "$1")/$2"
+            if [[ ! -e "$target" ]]; then
+                echo "nix_native_lib: $target does not exist" >&2
+                exit 1
+            fi
+            ln -s "$target" "$3"
+            """,
+            "--",
+            out_link,
+            relative_path,
+            output.as_output(),
+        ),
+        category = category,
+        allow_cache_upload = False,
+        local_only = True,
+    )
+    return output
+
+def _extract_soname(ctx: AnalysisContext, shared_lib: Artifact) -> Artifact:
+    """
+    The `DT_SONAME` of an ELF shared library.
+
+    This is the prelude's `extract_soname_from_shlib` but using objdump
+    hermetically.
+    """
+    output = ctx.actions.declare_output("__soname__.txt")
+    ctx.actions.run(
+        cmd_args(
+            "bash",
+            "-ec",
+            """
+            soname=$("$1" -p "$2" | while read -r key value _; do
+                if [[ "$key" == SONAME ]]; then
+                    echo "$value"
+                fi
+            done)
+            if [[ -z "$soname" ]]; then
+                echo "nix_native_lib: $2 has no DT_SONAME" >&2
+                exit 1
+            fi
+            echo "$soname" > "$3"
+            """,
+            "--",
+            ctx.attrs._objdump[RunInfo],
+            shared_lib,
+            output.as_output(),
+        ),
+        category = "extract_soname",
+        identifier = shared_lib.short_path,
+        # The library is an external symlink into the Nix store, so this can
+        # only run where that store is.
+        local_only = True,
+        allow_cache_upload = False,
+    )
+    return output
 
 def _nix_native_lib_impl(ctx: AnalysisContext):
     # This rule emits providers for a Nix-built native library as if you had
@@ -137,33 +220,68 @@ def _nix_native_lib_impl(ctx: AnalysisContext):
 
     providers = []
 
-    # Hmmm. This feels kinda nasty but I think it's fine? I guess we might want
-    # to replace it with Buck2-built Bash and `readlink` at some point.
-    #
-    # Note: There's two reasons we use `bash` to run `readlink` instead of
-    # using `out_link.project`. The first is that the `Artifact.project`
-    # method hard-errors if you attempt to use it on a symlink. The second
-    # is that having a link to an absolute path is nice.
-    lib_output = ctx.actions.declare_output(lib_filename)
-    ctx.actions.run(
-        cmd_args(
-            "bash",
-            "-ec",
-            """
-            ln -s "$(readlink "$1")/$2" "$3"
-            """,
-            "--",
-            out_link,
-            lib_relative_path,
-            lib_output.as_output(),
-        ),
+    lib_output = _symlink_into_nix_output(
+        ctx,
+        out_link = out_link,
+        relative_path = lib_relative_path,
+        output_name = lib_filename,
         category = "symlink",
     )
 
-    providers.append(DefaultInfo(default_output = lib_output))
+    # The directory to put on the header search path, e.g. the `include` of the
+    # `dev` output, holding `libheif/heif.h`.
+    #
+    # FIXME(jadel): I have conflicted feelings about this implementation
+    # choice: I wonder if this should actually use pkg-config instead and treat
+    # it as an opaque argfile
+    # (c.f. this but we'd reimpl it ourselves: https://github.com/facebook/buck2/blob/e44a63727d924b037dcec097c567ffbcc0c78799/prelude/third-party/pkgconfig.bzl),
+    # since packages are allowed to put complicated load-bearing nonsense like
+    # -D preprocessor defines into the cflags for their consumers (as well as
+    # have dependencies whose cflags *also* land in our stuff).
+    #
+    # For more complicated libraries like libfolly (required for Glean) which
+    # have ABI-affecting -D defines, we almost certainly need to get the actual
+    # cflags out of pkg-config for safety.
+    #
+    # Some investigation while writing this turned up that it's ~impossible to
+    # call `pkg-config` from buck2 itself, since it requires all the machinery
+    # of the nixpkgs stdenv to resolve `Deps` (if any; e.g. libheif depends on
+    # libaom). The right way to do this is likely as a `runCommand` derivation
+    # defined in the buck2-toolchain that simply runs `pkg-config
+    # --cflags` and writes it to the derivation output, then we consume
+    # that derivation via nix_build.
+    #
+    # We may possibly want to skip the `--libs` part and implement it manually
+    # in buck2 rather than calling pkg-config, since it means that the shared
+    # library machinery of buck2 can't see the libs. Not sure.
+    #
+    # However, using pkgconfig with a @response_file makes the info more opaque to
+    # buck2 itself, which is itself a tradeoff.
+    include_dir = None
+    if ctx.attrs.include_output != None:
+        input_sub_targets = ctx.attrs.input[DefaultInfo].sub_targets
+        include_providers = input_sub_targets.get(ctx.attrs.include_output)
+        if include_providers == None or NixDynamicInfo not in include_providers:
+            fail("`include_output = \"{}\"` does not name an output of {}; add it to that target's `outputs`.".format(
+                ctx.attrs.include_output,
+                ctx.attrs.input.label,
+            ))
+        include_out_link = include_providers[DefaultInfo].default_outputs[0]
+        include_dir = _symlink_into_nix_output(
+            ctx,
+            out_link = include_out_link,
+            relative_path = ctx.attrs.include_subdir,
+            output_name = "include",
+            category = "symlink_include",
+        )
+
+    providers.append(DefaultInfo(
+        default_output = lib_output,
+        sub_targets = {} if include_dir == None else {"include": [DefaultInfo(default_output = include_dir)]},
+    ))
 
     pre_flags = []
-    pre_flags.extend(cxx_attr_exported_linker_flags(ctx))
+    pre_flags.extend(ctx.attrs.exported_linker_flags)
 
     if nix_dyn_info:
         providers.append(nix_dyn_info)
@@ -198,14 +316,37 @@ def _nix_native_lib_impl(ctx: AnalysisContext):
 
     output_style_link_infos = {LibOutputStyle("shared_lib"): link_infos}
 
-    # Propagate preprocessor info from dependencies.
+    # Propagate preprocessor info from dependencies, plus our own include dir if
+    # we have one.
+    #
+    # We pass the include dir as a plain `-isystem <dir>` in
+    # `CPreprocessorArgs.args`, matching `prebuilt_cxx_library`. We have to use
+    # a relatively opaque arg due to the other options requiring greater a
+    # priori knowledge of the structure of the output.
+    #
+    # We point `-isystem` at the buck-out symlink rather than the absolute
+    # `/nix/store` path on purpose: that registers a real input (so the Nix
+    # build is ordered before the compile) and keeps dep-file entries inside the
+    # build root. Absolute out-of-root paths are silently discarded by the
+    # prelude's `dep_file_utils.py`, which would lose header change tracking.
+    #
+    # Note: Haskell targets don't yet see these. We plan to implement a rule to
+    # generate package.conf rules for these so that they can be fed into
+    # haskell rules as normal.
+    own_pp = []
+    if include_dir != None:
+        isystem = format_system_include_arg(
+            cmd_args(include_dir),
+            cxx_toolchain.cxx_compiler_info.compiler_type,
+        )
+        own_pp.append(CPreprocessor(
+            args = CPreprocessorArgs(args = isystem, precompile_args = isystem),
+        ))
+
     inherited_pp_info = cxx_inherited_preprocessor_infos(ctx.attrs.deps)
     providers.append(cxx_merge_cpreprocessors(
         ctx.actions,
-        # TODO: I think we need to fill this in with like, `include` dirs from
-        # the `-dev` output of the Nix build? But we can kick that can down the
-        # road.
-        own = [],
+        own = own_pp,
         xs = inherited_pp_info,
     ))
 
@@ -222,11 +363,20 @@ def _nix_native_lib_impl(ctx: AnalysisContext):
     # by a Rust or C++ target.
     #
     # See: link-removed
-    soname = to_soname(extract_soname_from_shlib(
-        actions = ctx.actions,
-        name = "__soname__.txt",
-        shared_lib = lib_output,
-    ))
+    #
+    # We only extract the real soname on ELF platforms, where it actually
+    # differs from the filename (`libheif.so.1` vs. `libheif.so`) and has to
+    # match the `DT_NEEDED` entry.
+    #
+    # A Mach-O dylib has an `LC_ID_DYLIB` install name (which is absolute under
+    # Nix) instead of a `DT_SONAME`. Thus on macOS we fall back to the plain
+    # filename, which is what `prebuilt_cxx_library` does by default (its
+    # `extract_soname` attr is `False`).
+    if cxx_toolchain.linker_info.type == LinkerType("gnu"):
+        soname = to_soname(_extract_soname(ctx, lib_output))
+    else:
+        soname = to_soname(lib_filename)
+
     solibs = [
         create_shlib_from_ctx(
             ctx,
@@ -314,6 +464,17 @@ _attrs = (
         "deps": attrs.list(attrs.dep(), default = [], doc = """
             Transitive dependencies needed to link against this library.
         """),
+        "include_output": attrs.option(attrs.string(), default = None, doc = """
+            The Nix output of `input` holding this library's headers, e.g.
+            `dev`. `input` must list it in its `outputs` so that it's available
+            as a sub-target.
+
+            If unset, this rule provides no headers to its dependents.
+        """),
+        "include_subdir": attrs.string(default = "include", doc = """
+            The subdirectory of `include_output` to add to the header search
+            path.
+        """),
         "wrap_rpath_ld_flags": attrs.bool(default = False, doc = """
             Wrap the absolute nix store library path into an argfile in order to pass -rpath and pre_flag configured with @argfile.
         """),
@@ -341,6 +502,10 @@ _attrs = (
         # See: https://github.com/MercuryTechnologies/buck2-prelude/blob/b19295e68de8455e0be58c1ad678665fcfd81a74/decls/common.bzl#L125-L132
         "labels": attrs.default_only(attrs.list(attrs.string(), default = [])),
         "_cxx_toolchain": attrs.default_only(attrs.toolchain_dep(default = "toolchains//:cxx")),
+        # Only used on ELF platforms, to read `DT_SONAME`.
+        # `BinaryUtilitiesInfo` (bafflingly) has no field for `objdump` so we need
+        # to directly reference the binary.
+        "_objdump": attrs.default_only(attrs.exec_dep(default = "toolchains//:nix_cxx[objdump]")),
     }
 )
 

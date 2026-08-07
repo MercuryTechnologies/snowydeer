@@ -44,9 +44,9 @@ def default_nix_toolchains():
             # linking random transitive dependencies on every executable), which is
             # desired for development. however, it's not good for deployment, so we
             # need to be able to change it.
-            "DEFAULT": "shared",
-            "root//constraints/link_style:shared": "shared",
-            "root//constraints/link_style:static_pic": "static_pic",
+            "root//constraints/link_style[auto]": "shared",
+            "root//constraints/link_style[shared]": "shared",
+            "root//constraints/link_style[static_pic]": "static_pic",
         }),
         linker_override = select({
             "DEFAULT": None,
@@ -66,6 +66,44 @@ def default_nix_toolchains():
     nix_rust_toolchain(
         name = "rust",
         exec_compatible_with = exec_compatible_with,
+        rustc_flags = select({
+            "prelude//cpu:arm64": select({
+                # Workaround for rustc and buck2 prelude not getting along on
+                # aarch64-linux w.r.t. cxx_library targets:
+                # https://github.com/rust-lang/rust/issues/154975
+                # https://github.com/facebook/buck2/issues/1405
+                #
+                # Buck2 puts the linker args in -Clink-arg where they are
+                # opaque to rustc and get placed after the normal Rust libraries.
+                #   … <rustc .o files> \
+                #    --as-needed -Bstatic <all rlibs> -Bdynamic \
+                #    -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc \      ← rustc's late_link_args; -lc gets --as-needed-dropped here
+                #    --eh-frame-hdr -z noexecstack --gc-sections -z relro -z now \
+                #    <buck's linker_args.txt content:> \
+                #      libring-…-c-asm-elf-aarch64.pic.a \             ← extracts curve25519.c.pic.o → refs __stack_chk_guard
+                #      -rpath … -lcrypto -rpath … -lssl \
+                #    crtendS.o crtn.o \
+                #    -rpath … -rpath …
+                #
+                # Then, if using ld.bfd rather than lld (which facebook almost
+                # certainly uses), --as-needed causes the DSO providing
+                # __stack_chk_guard to get dropped while linking.
+                #
+                # __stack_chk_guard lives in ld-linux-aarch64.so.1 which gets
+                # pulled in via the glibc `libc.so` linker script in
+                # AS_NEEDED(...). That means that if nothing requests a symbol
+                # from `ld-linux` *prior* to `-lc` in link args, `ld-linux`
+                # won't become a dependency. The flags we insert via
+                # `rustc_flags` here still appear before the big file of link
+                # args inserted by the prelude.
+                #
+                # Fix: name ld-linux directly under --no-as-needed so it is
+                # unconditionally linked, no matter the order.
+                "prelude//os:linux": ["-Clink-arg=-Wl,--push-state,--no-as-needed", "-Clink-arg=-l:ld-linux-aarch64.so.1", "-Clink-arg=-Wl,--pop-state"],
+                "DEFAULT": [],
+            }),
+            "DEFAULT": [],
+        }),
         visibility = ["PUBLIC"],
     )
 
@@ -97,6 +135,7 @@ def default_flake_attrs():
             "c++",
             "nm",
             "objcopy",
+            "objdump",
             "ranlib",
             "strip",
         ],
@@ -141,4 +180,14 @@ def default_flake_attrs():
         attr = "pyrefly-wrapper",
         binary = "pyrefly",
         flake = "@nix//:nix_overlays",
+    )
+
+    nix_build(
+        name = "buildifier",
+        binaries = [
+            "buildozer",
+        ],
+        binary = "buildifier",
+        flake = "@nix//:nix_overlays",
+        visibility = ["PUBLIC"],
     )

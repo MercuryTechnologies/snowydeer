@@ -18,8 +18,6 @@ mercury_haskell_library(
         "//haskell:aeson",
         "//haskell:base",
         "//haskell:bytestring",
-        "//haskell:either",
-        "//haskell:monad-logger",
         "//haskell:optparse-applicative",
         "//haskell:rio",
         "//haskell:text",
@@ -41,7 +39,6 @@ mercury_haskell_binary(
     visibility = ["//snowydeer/container:"],
     deps = [
         ":Container",
-        "//haskell:base",
         "//local-packages/a-mercury-prelude",
     ],
 )

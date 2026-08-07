@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+python_binary(
+    name = "demo",
+    main = "demo.py",
+    deps = [
+        "//third_party/python:requests",
+    ],
+)

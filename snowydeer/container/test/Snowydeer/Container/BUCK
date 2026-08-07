@@ -7,17 +7,18 @@ load("//haskell:haskell_spec.bzl", "local_packages_spec")
 local_packages_spec(
     name = "application_spec",
     srcs = ["ApplicationSpec.hs"],
+    env = {
+        "BUILDOZER": "$(exe toolchains//:buildifier[buildozer])",
+    },
     main = "Snowydeer.Container.ApplicationSpec",
     deps = [
         "//haskell:aeson",
         "//haskell:base",
-        "//haskell:bytestring",
         "//haskell:containers",
         "//haskell:hspec",
-        "//haskell:hspec-expectations",
         "//haskell:rio",
+        "//haskell:shakespeare",
         "//haskell:text",
-        "//haskell:unliftio",
         "//haskell:unordered-containers",
         "//local-packages/a-mercury-prelude",
         "//snowydeer/container/src/Snowydeer/Container",
@@ -31,15 +32,9 @@ local_packages_spec(
     main = "Snowydeer.Container.PipelineSpec",
     deps = [
         "//haskell:aeson",
-        "//haskell:bytestring",
         "//haskell:hspec",
-        "//haskell:hspec-expectations",
         "//haskell:rio",
         "//haskell:shakespeare",
-        "//haskell:text",
-        "//haskell:unliftio",
-        "//haskell:unordered-containers",
-        "//local-packages/a-mercury-prelude",
         "//snowydeer/container/src/Snowydeer/Container",
     ],
 )

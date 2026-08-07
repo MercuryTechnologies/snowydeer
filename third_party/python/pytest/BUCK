@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+load(":pytest.bzl", "pytest")
+
+python_library(
+    name = "lib",
+    srcs = ["tpx_pytest_bridge.py"],
+    typing = True,
+    visibility = ["PUBLIC"],
+    deps = ["//third_party/python:pytest"],
+)
+
+pytest(
+    name = "test_tpx_pytest_bridge",
+    srcs = ["test_tpx_pytest_bridge.py"],
+    # `:lib` is the module under test. The `pytest()` macro independently
+    # appends `:lib` as a runner dependency, but that's an implementation
+    # detail callers shouldn't rely on -- keep the test-target's relationship
+    # to the code-under-test visible here.
+    deps = [":lib"],
+)
+
+# Plain `python_test` (unittest discovery), deliberately not a `pytest()`
+# target: it exercises the bridge by calling `tpx_pytest_bridge.main` directly.
+python_test(
+    name = "test_tpx_pytest_bridge_e2e",
+    srcs = ["test_tpx_pytest_bridge_e2e.py"],
+    deps = [":lib"],
+)

@@ -68,6 +68,52 @@ def _nix_rust_toolchain(ctx: AnalysisContext) -> list[Provider]:
             rustc_test_flags = ctx.attrs.rustc_test_flags,
             rustdoc = RunInfo(args = [rustdoc]),
             rustdoc_flags = ctx.attrs.rustdoc_flags,
+
+            # Explicitly setting the sysroot fixes two separate problems causing
+            # gratuitous nix store references to the Rust toolchain.
+            #
+            # One of them was references appearing in the .data section due to
+            # panic messages for various std functions. This is related to the
+            # sysroot. By default, rustc finds its sysroot relative to the rustc
+            # executable: this means an absolute /nix/store path, which then lands
+            # in snowydeer outputs and causes dependency bloat.
+            #
+            # The other one was references appearing in debuginfo (at least on
+            # macOS), which were referencing the static libraries in the sysroot.
+            # Same deal as the panic messages. Buck already handles buck-out paths
+            # in debuginfo fine (`-oso_prefix .` relativizes debuginfo paths to .
+            # on macOS; that happens by default on Linux) so we can fix the problem
+            # by ensuring the reference goes through a relative path rather than an
+            # absolute one.
+            #
+            # To verify these problems, build a `snowydeer_package` rule and
+            # call `nix path-info --json` on the output and audit that the
+            # `references` field doesn't include a Rust compiler.
+            #
+            # For example, after removing the `sysroot_path` field:
+            #
+            #     $ nix path-info --json $(cat $(buck bxl //snowydeer/snowydeer.bxl:main -- --target //tools/bwat/bin:package)) | jq
+            #     BXL SUCCEEDED
+            #     [
+            #       {
+            #         "ca": "fixed:r:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            #         "narHash": "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=",
+            #         "narSize": 24825784,
+            #         "path": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-package",
+            #         "references": [
+            #           "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-libiconv-109",
+            #           "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-rust-mixed"
+            #         ],
+            #         "registrationTime": 1785952833,
+            #         "ultimate": true,
+            #         "valid": true
+            #       }
+            #     ]
+            #
+            # Here, `/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-rust-mixed` is
+            # a ~300MB path containing `rustc`, `cargo`, associated libraries,
+            # etc.
+            sysroot_path = ctx.attrs.nix_rust[DefaultInfo].default_outputs[0],
             warn_lints = ctx.attrs.warn_lints,
         ),
     ]

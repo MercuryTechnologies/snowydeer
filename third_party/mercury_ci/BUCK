@@ -4,7 +4,10 @@
 
 python_library(
     name = "mercury_ci",
-    srcs = glob(["*.py"]),
+    srcs = glob(
+        ["*.py"],
+        exclude = ["test_*.py"],
+    ),
     base_module = "mercury_ci",
     typing = True,
     visibility = ["PUBLIC"],

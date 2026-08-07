@@ -8,7 +8,7 @@ Defaults for Haskell compiler flags.
 
 default_extensions = [
     "Haskell2010",
-    #
+    # keep-sorted start
     "BangPatterns",
     "BlockArguments",
     "DataKinds",
@@ -27,13 +27,16 @@ default_extensions = [
     "ImportQualifiedPost",
     "InstanceSigs",
     "LambdaCase",
+    "LexicalNegation",
     "MultiParamTypeClasses",
     "MultiWayIf",
     "NamedFieldPuns",
     "NegativeLiterals",
+    "NoForeignFunctionInterface",  # For some reason this is on by default???! It makes `label` a reserved word.
     "NoImplicitPrelude",
     "NumericUnderscores",
     "OverloadedLabels",
+    "OverloadedRecordDot",
     "OverloadedStrings",
     "PartialTypeSignatures",
     "PatternSynonyms",
@@ -44,12 +47,10 @@ default_extensions = [
     "StandaloneDeriving",
     "TypeApplications",
     "TypeFamilies",
+    "TypeOperators",
     "UndecidableInstances",
     "ViewPatterns",
-    "OverloadedRecordDot",
-    "TypeOperators",
-    # for some reason this is on by default???! it turns "label" into a reserved word
-    "NoForeignFunctionInterface",
+    # keep-sorted end
 ]
 
 default_ghc_flags = ["-X" + ext for ext in default_extensions] + [

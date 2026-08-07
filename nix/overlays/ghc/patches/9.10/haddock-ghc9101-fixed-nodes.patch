@@ -1,0 +1,21 @@
+diff -rupN a/utils/haddock/haddock-api/src/Haddock/Interface.hs b/utils/haddock/haddock-api/src/Haddock/Interface.hs
+--- a/utils/haddock/haddock-api/src/Haddock/Interface.hs	2026-07-08 00:43:20.965329914 -0700
++++ b/utils/haddock/haddock-api/src/Haddock/Interface.hs	2026-07-08 00:45:48.927985950 -0700
+@@ -80,7 +80,7 @@ import GHC.Types.Name.Env (extendNameEnv
+ import GHC.Unit.External (ExternalPackageState (..))
+ import GHC.Unit.Home.ModInfo
+ import GHC.Unit.Module (extendModuleEnv)
+-import GHC.Unit.Module.Graph (ModuleGraphNode (..))
++import GHC.Unit.Module.Graph (ModuleGraphNode (..), ModuleNodeInfo(..))
+ import GHC.Unit.Module.ModDetails
+ import GHC.Unit.Module.ModIface (mi_decls, mi_semantic_module, mi_boot, mi_insts, mi_fam_insts)
+ import GHC.Unit.Module.ModSummary (isBootSummary)
+@@ -224,7 +224,7 @@ createIfaces verbosity modules flags ins
+       -- but if module A {-# SOURCE #-} imports B, then we can't say the same.
+       --
+   let
+-      go (AcyclicSCC (ModuleNode _ ms))
++      go (AcyclicSCC (ModuleNode _ (ModuleNodeCompile ms)))
+         | NotBoot <- isBootSummary ms = [ms]
+         | otherwise = []
+       go (AcyclicSCC _) = []

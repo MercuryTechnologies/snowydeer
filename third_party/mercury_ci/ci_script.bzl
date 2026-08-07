@@ -13,6 +13,7 @@ def ci_script(
         name,
         main,
         deps = [],
+        args = [],
         env = {}):
     # Using hotel in OSS doesn't work because the CI script is in the critical
     # path to having hotel, so there's a dependency cycle.
@@ -28,6 +29,7 @@ def ci_script(
     native.command_alias(
         name = name,
         exe = ":" + name + ".binary",
+        args = args,
         env = {
             "HOTEL": "$(exe toolchains//:hotel-california)" if use_hotel else "skip",
         } | env,

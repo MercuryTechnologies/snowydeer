@@ -7,7 +7,8 @@ Tool for importing Buck2 artifacts into a Nix store as store paths with the
 correct Nix-level dependencies.
 """
 
-load("@toolchains//nix/nix_build.bzl", "NixDepsTsetProvider", "NixDynamicDepsTset", "NixDynamicInfo", "NixPathInfo")
+load("@prelude//utils:utils.bzl", "flatten")
+load("@toolchains//nix/nix_build.bzl", "NixDepsTsetProvider", "NixDynamicDepsTset", "NixPathInfo", "collect_all_nix_output_dynamics_for_target")
 
 def _dump_nix_paths_dynamic_impl(
         bxl_ctx: bxl.Context,
@@ -64,8 +65,14 @@ def _import_store_path(ctx: bxl.Context, bxl_actions: bxl.Actions, cquery: bxl.C
     all_dynamics = []
     for (_which, dep) in deps_analysis.items():
         providers = dep.providers()
-        if NixDynamicInfo in providers:
-            all_dynamics.append(providers[NixDynamicInfo].dynamic)
+
+        # All of the outputs, not just the default one. `cquery` hands us
+        # configured *targets*, so a dep written as
+        # `//toolchains:openssl_nix[dev]` arrives here as plain
+        # `//toolchains:openssl_nix`. Thus we need the nix paths from all
+        # subtargets.
+        all_dynamics.extend(collect_all_nix_output_dynamics_for_target(providers))
+
         if NixDynamicDepsTset in providers:
             all_dynamics.append(providers[NixDynamicDepsTset].dynamic)
 
@@ -96,12 +103,16 @@ def _import_store_path(ctx: bxl.Context, bxl_actions: bxl.Actions, cquery: bxl.C
         category = "snowydeer_import",
         identifier = str(configured_target.label),
         local_only = True,
+        # Soundness: this *must* not be uploaded as it needs to happen on the
+        # same machine as the further usage.
+        allow_cache_upload = False,
     )
     return ctx.output.ensure(out)
 
 def _collect_nix_deps(ctx: bxl.Context):
     # Use cquery without explicit platform - will use configured targets from CLI
     cquery = ctx.cquery()
+    targets = flatten(ctx.cli_args.target)
 
     build_store_path = ctx.unconfigured_sub_targets("//snowydeer:build_store_path")
 
@@ -109,12 +120,28 @@ def _collect_nix_deps(ctx: bxl.Context):
     bxl_actions = ctx.bxl_actions(
         exec_deps = [build_store_path],
         toolchains = ["toolchains//:rust", "toolchains//:python"],
-        target_platform = "prelude//platforms:default",
+        # @moss-disable[end= ]: target_platform = "mwb//platforms:default",
+        target_platform = "prelude//platforms:default",  # @moss-enable
     )
 
     # Use target_universe with ctx.modifiers to respect CLI modifiers (-m release)
     # Without passing modifiers, target_universe uses empty modifiers by default
-    configured_targets = ctx.target_universe(ctx.cli_args.target, modifiers = ctx.modifiers).target_set()
+    #
+    # FIXME(jadel): there's "interesting" behaviour where if you have the
+    # following setup:
+    # A has a transition dep: A -[transition]-> B
+    # `targets` is A and B
+    # Concretely: //snowydeer/demo:hello and //snowydeer/demo:hello_pkg.
+    #
+    # Then we will have two copies of B in the target_set returned here.
+    # We have an invariant deeper in snowydeer (due to how _import_store_path
+    # assigns artifact names) that a given target only appears once in the set
+    # of things to import, which gets violated by this.
+    # I dunno the principled way to fix this properly, so I'm just leaving this
+    # note to the next maintainer. I *think* we should only include the targets
+    # in the configuration that the user directly asked for at the command
+    # line, rather than the transitioned one?
+    configured_targets = ctx.target_universe(targets, modifiers = ctx.modifiers).target_set()
     for configured_target in configured_targets:
         result = _import_store_path(ctx = ctx, bxl_actions = bxl_actions, cquery = cquery, build_store_path = build_store_path, configured_target = configured_target)
         ctx.output.print(result)
@@ -122,8 +149,7 @@ def _collect_nix_deps(ctx: bxl.Context):
 main = bxl.main(
     impl = _collect_nix_deps,
     cli_args = {
-        # target_expr already handles multiple targets, returns list of TargetLabel
-        "target": bxl.cli_args.target_expr("Target(s) to build and import"),
+        "target": bxl.cli_args.list(bxl.cli_args.target_expr("Target(s) to build and import"), default = []),
     },
     doc = """
         Extracts the direct/buck2-transitive Nix dependency list of a buck2 target into a messy json file.

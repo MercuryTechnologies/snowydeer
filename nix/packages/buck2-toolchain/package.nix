@@ -14,6 +14,7 @@
   # keep-sorted start
   bash,
   buck2-source,
+  buildifier,
   cacert,
   clippy,
   coreutils,
@@ -22,6 +23,7 @@
   gnused,
   haskell,
   nix,
+  nix-prefetch-docker,
   pyrefly-wrapper,
   python3,
   ripgrep,
@@ -91,6 +93,13 @@ in
           done
       }
 
+      # The stdenv setup adds -rpath $out/lib to NIX_LDFLAGS (the "self-rpath")
+      # before buildPhase runs. capture_env bakes NIX_LDFLAGS into the cc/c++
+      # wrappers, so without this strip every binary linked by this toolchain
+      # inherits buck2-cxx/lib in its RUNPATH — even though that directory does
+      # not exist.
+      NIX_LDFLAGS=$(echo "$NIX_LDFLAGS" | sed "s|-rpath $out/lib||g")
+
       mkdir -p "$out/bin"
 
       for tool in ar nm objcopy ranlib strip; do
@@ -135,7 +144,14 @@ in
           done
       }
 
+      # Same self-rpath bug as the cxx derivation above: strip -rpath $out/lib
+      # before capture so it doesn't leak into the RUNPATH of every binary
+      # linked by this toolchain. The $out/lib symlink exists for buck rules to
+      # embed a relative buck-out path, not to add an rpath.
+      NIX_LDFLAGS=$(echo "$NIX_LDFLAGS" | sed "s|-rpath $out/lib||g")
+
       mkdir -p "$out/bin"
+      ln -s "$($RUSTC/bin/rustc --print sysroot)/lib" "$out/lib"
 
       mapfile -t < <(capture_env)
 
@@ -160,6 +176,8 @@ in
   inherit
     # keep-sorted start
     buck2-source # just so it gets uploaded to cache
+    buildifier
+    nix-prefetch-docker
     pyrefly-wrapper
     ripgrep
     skopeo

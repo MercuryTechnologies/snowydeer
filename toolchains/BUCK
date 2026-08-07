@@ -89,6 +89,13 @@ nix_build(
 )
 
 nix_build(
+    name = "nix-prefetch-docker",
+    binary = "nix-prefetch-docker",
+    flake = "@nix//:nix_overlays",
+    visibility = ["PUBLIC"],
+)
+
+nix_build(
     name = "cache-hook",
     binary = "cache-hook",
     flake = "@nix//:nix_overlays",

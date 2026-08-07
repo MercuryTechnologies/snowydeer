@@ -7,8 +7,33 @@ Demo targets for Snowydeer
 """
 
 load("//haskell:mercury_haskell.bzl", "mercury_haskell_binary")
+load("//snowydeer:base_image.bzl", "snowydeer_base_image")
 load("//snowydeer:container.bzl", "snowydeer_container")
 load("//snowydeer:package.bzl", "snowydeer_package")
+
+snowydeer_base_image(
+    name = "alpine_base",
+    # Run `buck run :alpine_base` to update these.
+    digest = "sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40",
+    follows_tag = "3.23",
+    image_name = "alpine",
+    nar_hashes = {
+        "aarch64-linux": "sha256-hUcL+KxPzKG8azOlyuRvUPhZUqBXd4I5R6l7bbAnVbU=",
+        "x86_64-linux": "sha256-CyZmqg4tEzzp+KlWxuEYIdEXKP1rXyi5Co3KntwGoL8=",
+    },
+)
+
+snowydeer_container(
+    name = "container_with_base",
+    base_image = ":alpine_base",
+    cmd = [
+        "/sbin/apk",
+        "--help",
+    ],
+    description = "Image based on alpine",
+    env = {"FOOBAR": "blah"},
+    main_contents = [],
+)
 
 mercury_haskell_binary(
     name = "hello",

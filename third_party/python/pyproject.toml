@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# This is a pyproject.toml for a fake python package, which generates the
+# entire python package set for Buck2.
+#
+# Add the packages you want in buck2 land in here.
+#
+# FIXME(jadel): we might want to use a uv workspace in the repo root so that we
+# can share the dep lists/lock files between uv and buck2. Later :)
+# FIXME(jadel): this may need to be split into open source and not open source
+# later :) for this, we would want to have a way to maintain the open source
+# subset automatically as a subset of the closed one.
+
+[project]
+name = "mwb-pypi-deps"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+  "requests",
+  "boto3",
+  "PyGithub",
+  "pytest >= 8.0",
+  "moto[server,s3]",
+  "expecttest",
+  "hypothesis",
+]

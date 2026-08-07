@@ -9,25 +9,19 @@ imported into the nix store.
 
 load("@prelude//cfg/modifier:name.bzl", "cfg_name")
 
-def _transition_to_static_impl(ctx: AnalysisContext):
-    constraint = ctx.attrs.constraint
+def _transition_impl(ctx: AnalysisContext):
+    automatic_value = ctx.attrs.automatic_value[ConstraintValueInfo]
     new_value = ctx.attrs.new_value
 
     def transition_impl_with_refs(platform: PlatformInfo) -> PlatformInfo:
-        constraints = platform.configuration.constraints
+        configuration = platform.configuration.copy()
 
-        # do nothing if someone has set the constraint explicitly, since they
-        # probably meant it!
-        setting = constraint[ConstraintSettingInfo]
-        if setting.label in constraints:
+        # Preserve an explicitly selected link style, but resolve automatic
+        # linking to the static style required for packaging.
+        if configuration.get(automatic_value.setting) != automatic_value:
             return platform
 
-        constraints[setting.label] = new_value[ConstraintValueInfo]
-
-        new_cfg = ConfigurationInfo(
-            constraints = constraints,
-            values = platform.configuration.values,
-        )
+        configuration.insert(new_value[ConstraintValueInfo])
 
         return PlatformInfo(
             # This will produce `cfg:<empty>` as a cfg name to match the cfg name of
@@ -37,19 +31,21 @@ def _transition_to_static_impl(ctx: AnalysisContext):
             #
             # For reference as to how modifier configs get their names:
             # https://github.com/facebook/buck2-prelude/blob/a977197a97f64bc8119d0c25e8c5693832ad74b0/cfg/modifier/name.bzl#L38
-            label = cfg_name(new_cfg),
-            configuration = new_cfg,
+            label = cfg_name(configuration),
+            configuration = configuration,
         )
 
     return [DefaultInfo(), TransitionInfo(impl = transition_impl_with_refs)]
 
-transition_to_static = rule(
-    impl = _transition_to_static_impl,
+transition = rule(
+    impl = _transition_impl,
     doc = """
-    Transitions a target to be built statically linked rather than with dynamic linking.
+    Transitions a target from a default to a non-default configuration,
+    skipping the transition if the configuration is explicitly specified.
 
-    This is necessary for packaging as we don't deal with pulling in dependency
-    dylibs in the package rule yet.
+    We use this for transitioning to a static configuration while building packages.
+    Static builds are necessary for packaging as we don't deal with pulling in
+    dependency dylibs in the package rule yet.
 
     NOTE: This likely causes a bunch of expensive rebuilds as it switches the
     configuration hash of everything! We might be able to make it only relink
@@ -59,8 +55,8 @@ transition_to_static = rule(
     and more importantly: https://github.com/facebook/buck2/issues/448
     """,
     attrs = {
-        "constraint": attrs.default_only(attrs.dep(default = "//constraints/link_style")),
-        "new_value": attrs.default_only(attrs.dep(default = "//constraints/link_style:static_pic")),
+        "automatic_value": attrs.dep(),
+        "new_value": attrs.dep(),
     },
     is_configuration_rule = True,
 )

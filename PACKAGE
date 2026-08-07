@@ -17,14 +17,14 @@ load("//buck:maybe_set_cfg_constructor.bzl", "maybe_set_cfg_constructor")
 maybe_set_cfg_constructor(
     aliases = struct(
         release = [
-            "//constraints/link_style:static_pic",
-            "//constraints/build_type:release",
+            "//constraints/link_style:link_style[static_pic]",
+            "//constraints/build_type:build_type[release]",
         ],
         shared = [
-            "//constraints/link_style:shared",
+            "//constraints/link_style:link_style[shared]",
         ],
         static = [
-            "//constraints/link_style:static_pic",
+            "//constraints/link_style:link_style[static_pic]",
         ],
     ),
     extra_data = struct(),

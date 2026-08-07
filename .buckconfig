@@ -64,6 +64,10 @@ materializations = deferred
 hash_all_commands = true
 file_watcher = watchman
 
+# Allow //A/B == //A/B:B (eponymous targets) in rules, rather than just at the CLI.
+# https://bazel.build/build/style-guide#target-naming
+infer_target_names = true
+
 # This is used to distinguish whether this project's root cell is our
 # shim-based one, or if someone has imported snowydeer from another project.
 [mercury]

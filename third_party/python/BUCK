@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+"""
+See ./pyproject.toml for the list of packages to generate into the buck2 set.
+"""
+
+load("@elk//:elk.bzl", "elk_packages", "uv_packages")
+# @moss-disable[end= ]: load("@toolchains//downloader:defs.bzl", "http_file")
+load(":linux-arm64.tags.json", linux_arm64_tags = "value")
+load(":linux-x86_64.tags.json", linux_x86_64_tags = "value")
+load(":macos-arm64.tags.json", macos_arm64_tags = "value")
+
+# This has an annoying caching bug: https://github.com/facebook/buck2/pull/1286
+load(":uv.lock.toml", lock = "value")
+
+elk_packages(
+    # @moss-disable[end= ]: downloader = http_file,
+    packages = uv_packages(lock),
+    # Tags generated with `buck2 run elk//tools:save_tags -- linux_x86_64.tags.json`.
+    platform_tags = {
+        "linux-arm64": linux_arm64_tags,
+        "linux-x86_64": linux_x86_64_tags,
+        "macos-arm64": macos_arm64_tags,
+    },
+)

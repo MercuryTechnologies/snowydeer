@@ -46,7 +46,15 @@ def __nix_build_drv(
         "--buck2-output",
         out_link.as_output(),
     ])
-    actions.run(nix_build, category = "nix_build", identifier = package, local_only = True)
+    actions.run(
+        nix_build,
+        category = "nix_build",
+        identifier = package,
+        local_only = True,
+        # Do not allow cache upload on these. It's imperative that nix builds are
+        # always run locally so that the store paths are made to exist.
+        allow_cache_upload = False,
+    )
 
     return out_link
 
@@ -158,6 +166,7 @@ _dynamic_build_derivation = dynamic_actions(
 )
 
 def _make_drv_json(ctx: AnalysisContext, name: str) -> Artifact:
+    # See Note [Redesigning Nix input-side integration] in nix_build.bzl.
     nix_drv_json_script = ctx.attrs._nix_drv_json_script[RunInfo]
     flake = ctx.attrs.flake
 
@@ -169,6 +178,7 @@ def _make_drv_json(ctx: AnalysisContext, name: str) -> Artifact:
         cmd,
         category = "nix_drv",
         local_only = True,
+        allow_cache_upload = False,
     )
     return drv_json
 
@@ -178,6 +188,7 @@ def _make_ghc_info(ctx: AnalysisContext, ghc: RunInfo) -> Artifact:
         cmd_args("bash", "-ec", '''printf '{ "version": "%s" }\n' "$( $1 --numeric-version )" > "$2" ''', "--", ghc, ghc_info.as_output()),
         category = "ghc_info",
         local_only = True,
+        allow_cache_upload = False,
     )
     return ghc_info
 
@@ -188,6 +199,7 @@ def _get_nix_config(ctx: AnalysisContext) -> Artifact:
         cmd_args("bash", "-ec", '''nix eval --json --apply 'f: f.nixConfig or {}' --file "$1/flake.nix" > "$2" ''', "--", flake, nix_config_json.as_output()),
         category = "nix_config",
         local_only = True,
+        allow_cache_upload = False,
     )
     return nix_config_json
 
@@ -225,6 +237,7 @@ def _nix_haskell_toolchain_impl(ctx: AnalysisContext) -> list[Provider]:
         cmd_args("bash", "-ec", '''$1 --print-libdir > "$2" ''', "--", ghc, ghc_dir.as_output()),
         category = "ghc_dir_info",
         local_only = True,
+        allow_cache_upload = False,
     )
 
     sub_targets = {}
