@@ -7,11 +7,11 @@
 
 -- | Container builder for Snowydeer.
 --
--- This calls Snowydeer on the buck targets that need it, produces the store
--- paths, then passes those into the Nix docker builder.
+-- The @snowydeer_container@ rule resolves every content dep to a Nix store path
+-- before we ever see it, so this just validates the metadata and passes the plan
+-- into the Nix docker builder.
 module Snowydeer.Container.Application
   ( -- * Build plans
-    InputPath (..),
     BaseImageSpec (..),
     GitRevInfo (..),
     BuildPlan (..),
@@ -49,7 +49,6 @@ import Data.Aeson qualified as A
 import Data.Aeson.TH qualified as A
 import Data.ByteString qualified as BS
 import Data.HashMap.Strict qualified as HashMap
-import Data.HashSet qualified as HashSet
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Text.IO qualified as TIO
@@ -61,31 +60,11 @@ import Snowydeer.Container.Metadata.Validation
 import Snowydeer.Container.Opts
 import Snowydeer.Container.Pipeline
 import Snowydeer.Container.Types
+import System.Posix.Directory (getWorkingDirectory)
 
 #ifndef __OSS__
 import Snowydeer.Container.Mercury
 #endif
-
--- | Object to be turned into a store path.
-data InputPath
-  = -- Resolved Buck target name in canonical form
-    InputBuckTarget Text
-  | -- | Nix store path that already exists
-    InputStorePath StorePath
-  deriving stock (Show, Ord, Eq)
-
-instance A.FromJSON InputPath where
-  parseJSON = A.withText "InputPath" \path ->
-    pure $
-      if "/nix/store" `T.isPrefixOf` path
-        then
-          InputStorePath . StorePath $ path
-        else
-          InputBuckTarget path
-
-instance A.ToJSON InputPath where
-  toJSON (InputBuckTarget t) = A.String t
-  toJSON (InputStorePath p) = A.String p.unStorePath
 
 -- | A pinned third-party base image to build a container on top of.
 --
@@ -163,14 +142,14 @@ data NixPrefetchDockerArgs = NixPrefetchDockerArgs
 -- | Build plan as viewed by Snowydeer Container.
 --
 -- Snowydeer Container needs to validate the metadata entries it is responsible
--- for validating, realize the buck targets in contents to Nix store paths, then
--- basically pass the rest of it to the Nix container builder.
+-- for validating, then basically pass the rest of it to the Nix container
+-- builder.
 --
 -- The container builder is then run with `nix run` such that it uploads the
 -- result to a registry.
 --
 -- See also @docs/buck2/deployment/snowydeer.md@.
-data BuildPlan metadataType contentType = BuildPlan
+data BuildPlan metadataType = BuildPlan
   { name :: Text
   -- ^ Name of the image.
   , cmd :: [Text]
@@ -179,13 +158,13 @@ data BuildPlan metadataType contentType = BuildPlan
   -- ^ Map of environment variables.
   , ports :: Set Text
   -- ^ Set of @9000/tcp@ like strings of ports to expose.
-  , contents :: [contentType]
+  , contents :: [StorePath]
   -- ^ Contents of the image which will be auto-layered as the system sees fit
   -- (maybe all @contents@ go in the same layer, maybe not).
   --
   -- This is for miscellaneous dependencies which won't change without having
   -- to rebuild the entire image regardless, for example, utilities.
-  , mainContents :: [contentType]
+  , mainContents :: [StorePath]
   -- ^ Contents of the image which will be forced into layers, each item by
   -- itself, with the dependencies auto-managed.
   --
@@ -201,16 +180,16 @@ data BuildPlan metadataType contentType = BuildPlan
   }
   deriving stock (Show, Eq)
 
-buildPlanMetadataL :: Lens (BuildPlan metadataType contentType) (BuildPlan metadataType' contentType) metadataType metadataType'
+buildPlanMetadataL :: Lens (BuildPlan metadataType) (BuildPlan metadataType') metadataType metadataType'
 buildPlanMetadataL = lens (.metadata) (\p v -> p {metadata = v})
 
-buildPlanContentsL :: Lens' (BuildPlan _metadataType contentType) [contentType]
+buildPlanContentsL :: Lens' (BuildPlan metadataType) [StorePath]
 buildPlanContentsL = lens (.contents) (\p v -> p {contents = v})
 
 $(A.deriveJSON A.defaultOptions ''BuildPlan)
 
 data ExportBuildPlan = ExportBuildPlan
-  { plan :: BuildPlan ValidMetadata StorePath
+  { plan :: BuildPlan ValidMetadata
   , layeringPipeline :: [PipelineItem]
   }
   deriving stock (Show)
@@ -221,14 +200,6 @@ instance A.ToJSON ExportBuildPlan where
       it'sAnObjectIPromise (A.Object o) = o
       it'sAnObjectIPromise _ = provideCallStack $ error "no really this is impossible"
 
-realTargetsToNix :: [Text] -> AppM [StorePath]
-realTargetsToNix targets = do
-  let args = [arg | path <- targets, arg <- ["--target", path]]
-  imported <-
-    proc "buck" (["bxl", "//snowydeer/snowydeer.bxl:main", "--"] <> map T.unpack args) $
-      fmap (T.lines . TE.decodeUtf8 . BS.toStrict) . readProcessStdout_
-  forM imported (fmap (StorePath . T.strip) . liftIO . TIO.readFile . T.unpack)
-
 -- | What Git revision is the repository on?
 newtype GitRevInfo = GitRevInfo
   { revision :: Text
@@ -237,39 +208,23 @@ newtype GitRevInfo = GitRevInfo
 
 realGitRevInfo :: AppM GitRevInfo
 realGitRevInfo = do
-  revision <- proc "git" ["rev-parse", "HEAD"] $ fmap (T.strip . TE.decodeUtf8 . BS.toStrict) . readProcessStdout_
+  -- This is intended primarily for testing; the contents of GIT_SHA1 in actual
+  -- environments are arbitary and usually wrong for this purpose (e.g. dev
+  -- shells have fake hashes in there).
+  revision0 <- lookupEnvFromContext "SNOWYDEER_TEST_GIT_SHA1"
+  revision <- case revision0 of
+    Just revision -> pure revision
+    Nothing -> proc "git" ["rev-parse", "HEAD"] $ fmap (T.strip . TE.decodeUtf8 . BS.toStrict) . readProcessStdout_
   pure $ GitRevInfo revision
 
 attachGitInfo :: GitRevInfo -> UncheckedMetadata -> UncheckedMetadata
 attachGitInfo GitRevInfo {revision} meta =
   meta <> HashMap.singleton "org.opencontainers.image.revision" revision
 
-realizeTargets :: RequireCallStack => ([Text] -> AppM [StorePath]) -> BuildPlan meta InputPath -> AppM (BuildPlan meta StorePath)
-realizeTargets targetsToNix plan = do
-  -- Map target names (which may appear multiple times) to a single list of
-  -- targets we give to build_store_path.
-  let needTargets = HashSet.toList $ extractBuckTargets plan.contents <> extractBuckTargets plan.mainContents
-  logInfo $ "To import to Nix: " <> displayShow needTargets
-
-  builtPaths <- targetsToNix needTargets
-  let mapping = HashMap.fromList $ zip needTargets builtPaths
-  logDebug $ "Mapping: " <> displayShow mapping
-
-  pure $ plan {contents = mapInput mapping <$> plan.contents, mainContents = mapInput mapping <$> plan.mainContents}
-  where
-    mapInput :: HashMap Text StorePath -> InputPath -> StorePath
-    mapInput mapping (InputBuckTarget t) = fromMaybe (error ("bug: missing store path " <> show t)) $ HashMap.lookup t mapping
-    mapInput _ (InputStorePath p) = p
-
-    extractBuckTargets :: [InputPath] -> HashSet Text
-    -- TODO: this is a really dumb obfuscated way of writing "give me all the things matching this variant" using MonadFail
-    extractBuckTargets = HashSet.fromList . mapMaybe (\p -> do InputBuckTarget p' <- pure p; pure p')
-
 type AppM = RIO App
 
 data Stubs = Stubs
-  { doTargetsToNix :: [Text] -> AppM [StorePath]
-  , doGitRevInfo :: AppM GitRevInfo
+  { doGitRevInfo :: AppM GitRevInfo
   , doNixPrefetchDocker :: NixPrefetchDockerArgs -> AppM PrefetchResult
   , doNixBuild :: Text -> HashMap Text Text -> AppM LByteString
   }
@@ -294,23 +249,13 @@ newtype AesonDecodeError = AesonDecodeError String
 asksStub :: (Stubs -> a) -> AppM a
 asksStub extract = asks (extract . (.stubs))
 
-buildRealPlan :: RequireCallStack => BuildPlan UncheckedMetadata InputPath -> AppM (BuildPlan ValidMetadata StorePath)
-buildRealPlan plan = do
-  config <- asks (.config)
-  newMeta <- either throwWithCallStack pure $ validateMetadata config.extraValidators plan.metadata
-  let validPlan = plan {metadata = newMeta}
-
-  targetsToNix <- asksStub doTargetsToNix
-  realPlan <- realizeTargets targetsToNix validPlan
-  logDebug $ "Plan: " <> displayShow realPlan
-  pure realPlan
-
 data ImageBuildMode = Upload Text | BuildOnly
   deriving stock (Show)
 
 nixBuildContainer :: ExportBuildPlan -> AppM StorePath
 nixBuildContainer plan = do
-  out <- nixBuild "pkgs.mercury.snowydeer.build-container" (HashMap.singleton "buildPlanJSON" planJson)
+  nixBuild' <- asksStub doNixBuild
+  out <- nixBuild' "snowydeer.build-container" (HashMap.singleton "buildPlanJSON" planJson)
   pure . StorePath . T.strip . TE.decodeUtf8 . BS.toStrict $ out
   where
     planJson = TE.decodeUtf8 . BS.toStrict . A.encode $ plan
@@ -367,7 +312,7 @@ uploadToRegistry skopeo streamer registryPath tags = do
         )
         runProcess_
 
-preprocessPlan :: Ord contentType => GitRevInfo -> BuildPlan UncheckedMetadata contentType -> BuildPlan UncheckedMetadata contentType
+preprocessPlan :: GitRevInfo -> BuildPlan UncheckedMetadata -> BuildPlan UncheckedMetadata
 preprocessPlan gitInfo@GitRevInfo {revision} plan =
   over buildPlanMetadataL (attachGitInfo gitInfo)
     -- Prevent a footgun: if you omit something from contents that's in mainContents it will get in the image no matter what.
@@ -376,13 +321,15 @@ preprocessPlan gitInfo@GitRevInfo {revision} plan =
 
 -- | Top level planning function. Takes a plan from the Buck rule and turns it
 -- into an exportable plan ready for Nix to build.
-planify :: RequireCallStack => GitRevInfo -> BuildPlan UncheckedMetadata InputPath -> AppM ExportBuildPlan
+planify :: RequireCallStack => GitRevInfo -> BuildPlan UncheckedMetadata -> AppM ExportBuildPlan
 planify gitInfo plan0 = do
   let plan1 = preprocessPlan gitInfo plan0
-  plan <- buildRealPlan plan1
-  let pipeline = pipelineFor plan.mainContents
+  config <- asks (.config)
+  newMeta <- either throwWithCallStack pure $ validateMetadata config.extraValidators plan1.metadata
+  let plan = plan1 {metadata = newMeta}
+  logDebug $ "Plan: " <> displayShow plan
 
-  pure ExportBuildPlan {layeringPipeline = pipeline, plan}
+  pure ExportBuildPlan {layeringPipeline = pipelineFor plan.mainContents, plan}
 
 findRepoRoot :: AppM FilePath
 findRepoRoot = T.unpack . T.strip . decodeUtf8Lenient . toStrictBytes <$> proc "buck" ["root"] readProcessStdout_
@@ -409,17 +356,35 @@ archOf sys = case T.splitOn "-" sys of
     _ -> Left $ "unknown arch in system double: " <> T.unpack sys
   _ -> Left $ "invalid Nix system double: " <> T.unpack sys
 
--- | Run `nix build -f . <attr>` with @--argstr@ pairs; returns stdout.
-nixBuild :: Text -> HashMap Text Text -> AppM LByteString
-nixBuild attr argstrs =
-  proc "nix" (["build", "-f", ".", "--print-build-logs", "--print-out-paths", T.unpack attr] <> flatArgstrs) readProcessStdout_
+-- | Run `nix build -f <nixFlake> <attr>` with @--argstr@ pairs; returns stdout.
+--
+-- @nixFlake@ is the buck2-toolchain flake directory, passed in by Buck as
+-- @--nix-flake@ so we get the flake's @nixConfig@ rather than whatever happens
+-- to be in the ambient cwd. It has a @default.nix@ (flake-compat), hence @-f@.
+nixBuild :: FilePath -> Text -> HashMap Text Text -> AppM LByteString
+nixBuild nixFlake attr argstrs =
+  proc "nix" (baseArgs <> flatArgstrs) readProcessStdout_
   where
+    baseArgs =
+      [ "build"
+      , "--print-build-logs"
+      , "--print-out-paths"
+      , -- Technically this is unsound: by not making an out link (and thus gc
+        -- root), the nix garbage collector may eat our path at random. I'm not
+        -- sure how we should solve this; we could abuse some space in buck-out I
+        -- suppose?
+        "--no-link"
+      , "--no-update-lock-file"
+      , "-f"
+      , nixFlake
+      , T.unpack attr
+      ]
     flatArgstrs = concatMap (\(k, v) -> ["--argstr", T.unpack k, T.unpack v]) (HashMap.toList argstrs)
 
 -- | Pull every pinned arch from a @base_image_spec.json@.
--- Runs `nix build pkgs.mercury.snowydeer.pull-base-image` for each pin; a hash
--- mismatch or unresolvable digest makes nix fail, propagating the error. Writes
--- the @--out@ marker file on full success so Buck knows the action completed.
+-- Runs `nix build snowydeer.pull-base-image` for each pin; a hash mismatch or
+-- unresolvable digest makes nix fail, propagating the error. Writes the
+-- @--out@ marker file on full success so Buck knows the action completed.
 validateBaseImage :: FilePath -> FilePath -> AppM ()
 validateBaseImage specPath outPath = do
   spec <- liftIO (throwDecodeFileStrict @BaseImageUpdateSpec specPath)
@@ -431,7 +396,7 @@ validateBaseImage specPath outPath = do
     logInfo $ "Validating pin for " <> display system
     void $
       nixBuild'
-        "pkgs.mercury.snowydeer.pull-base-image"
+        "snowydeer.pull-base-image"
         (HashMap.fromList [("imageName", spec.imageName), ("imageDigest", spec.imageDigest), ("hash", narHash), ("system", system)])
   liftIO $ TIO.writeFile outPath "OK\n"
 
@@ -540,18 +505,17 @@ app opts = provideCallStack do
       gitInfo <- Monad.join (asksStub doGitRevInfo)
       planJson <-
         (either (throwWithCallStack . AesonDecodeError) pure)
-          =<< liftIO (A.eitherDecodeFileStrict @(BuildPlan UncheckedMetadata InputPath) buildPlan)
+          =<< liftIO (A.eitherDecodeFileStrict @(BuildPlan UncheckedMetadata) buildPlan)
       plan <- planify gitInfo planJson
       storePath <- nixBuildContainer plan
       pure (plan, gitInfo, storePath)
 
-realStubs :: FilePath -> Stubs
-realStubs nixPrefetchDockerExe =
+realStubs :: FilePath -> FilePath -> Stubs
+realStubs nixPrefetchDockerExe nixFlake =
   Stubs
-    { doTargetsToNix = realTargetsToNix
-    , doGitRevInfo = realGitRevInfo
+    { doGitRevInfo = realGitRevInfo
     , doNixPrefetchDocker = realNixPrefetchDocker nixPrefetchDockerExe
-    , doNixBuild = nixBuild
+    , doNixBuild = nixBuild nixFlake
     }
 
 defaultConfig :: SnowydeerConfig
@@ -567,5 +531,6 @@ main = do
 
   logOpts <- logOptionsHandle stderr opts.verbose
   processContext <- mkDefaultProcessContext
+  nixFlake <- maybe (fmap (<> "/nix") getWorkingDirectory) pure opts.nixFlake
   withLogFunc logOpts \logFunc ->
-    runRIO (App {logFunc, processContext, stubs = realStubs opts.nixPrefetchDockerExe, config = defaultConfig}) (app opts)
+    runRIO (App {logFunc, processContext, stubs = realStubs opts.nixPrefetchDockerExe nixFlake, config = defaultConfig}) (app opts)

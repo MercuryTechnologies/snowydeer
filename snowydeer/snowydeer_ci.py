@@ -32,7 +32,7 @@ def go(upload_mode: UploadMode, ci: CiActions):
         # and not build everything else.
         default_oss_ci(upload_mode, buck2)
 
-    buck2.test(["//snowydeer/..."])
+    buck2.test(["//snowydeer/...", "--exclude", "large"])
 
 
 def main():

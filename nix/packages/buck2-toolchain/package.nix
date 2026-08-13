@@ -5,15 +5,18 @@
 {
   lib,
   stdenv,
-  makeWrapper,
   writeShellScriptBin,
+  writeText,
 
   compilerName,
   cache-hook,
 
+  snowydeer,
+
   # keep-sorted start
   bash,
   buck2-source,
+  buck2-support,
   buildifier,
   cacert,
   clippy,
@@ -24,6 +27,8 @@
   haskell,
   nix,
   nix-prefetch-docker,
+  podman,
+  protobuf,
   pyrefly-wrapper,
   python3,
   ripgrep,
@@ -49,6 +54,20 @@ let
       }) (builtins.filter isHaskellLibrary (lib.closePropagation packages))
     );
 
+  # Every haskellPackages derivation path, formatted so it can be piped
+  # into nix derivation show --stdin
+  #
+  # This exists so the nix_drv action can be a nix build of a single flake
+  # attribute, leveraging the eval cache (when used with the nix store add-path
+  # in the rules).
+  #
+  # unsafeDiscardOutputDependency so we don't actually build the package set.
+  haskellPackagesDrvPaths = writeText "haskell-packages-drv-paths" (
+    lib.concatMapStringsSep "\n" (drv: builtins.unsafeDiscardOutputDependency drv + "^*") (
+      builtins.attrValues haskellPackages
+    )
+  );
+
   buck2BuildInputs =
     [
       bash
@@ -66,105 +85,16 @@ let
     ];
 in
 {
-  cxx = stdenv.mkDerivation {
-    name = "buck2-cxx";
-    dontUnpack = true;
-    dontCheck = true;
-    nativeBuildInputs = [ makeWrapper ];
-    buildPhase = ''
-      function capture_env() {
-          # variables to export, all variables with names beginning with one of these are exported
-          local -ar vars=(
-              NIX_CC_WRAPPER_TARGET_HOST_
-              NIX_CFLAGS_COMPILE
-              NIX_DONT_SET_RPATH
-              NIX_ENFORCE_NO_NATIVE
-              NIX_HARDENING_ENABLE
-              NIX_IGNORE_LD_THROUGH_GCC
-              NIX_LDFLAGS
-              NIX_NO_SELF_RPATH
-          )
-          for prefix in "''${vars[@]}"; do
-              for v in $( eval 'echo "''${!'"$prefix"'@}"' ); do
-                  echo "--set"
-                  echo "$v"
-                  echo "''${!v}"
-              done
-          done
-      }
+  inherit (buck2-support) cxx;
 
-      # The stdenv setup adds -rpath $out/lib to NIX_LDFLAGS (the "self-rpath")
-      # before buildPhase runs. capture_env bakes NIX_LDFLAGS into the cc/c++
-      # wrappers, so without this strip every binary linked by this toolchain
-      # inherits buck2-cxx/lib in its RUNPATH — even though that directory does
-      # not exist.
-      NIX_LDFLAGS=$(echo "$NIX_LDFLAGS" | sed "s|-rpath $out/lib||g")
-
-      mkdir -p "$out/bin"
-
-      for tool in ar nm objcopy ranlib strip; do
-          ln -st "$out/bin" "$NIX_CC/bin/$tool"
-      done
-
-      mapfile -t < <(capture_env)
-
-      makeWrapper "$NIX_CC/bin/$CC" "$out/bin/cc" "''${MAPFILE[@]}"
-      makeWrapper "$NIX_CC/bin/$CXX" "$out/bin/c++" "''${MAPFILE[@]}"
-    '';
+  # We ship the toolchains with fenix internally, but that's unnecessary
+  # complexity for OSS which can just use the nixpkgs toolchains.
+  rust = buck2-support.rust.override {
+    rustToolchain = rustc;
+    clippyToolchain = clippy;
   };
 
-  rust = stdenv.mkDerivation {
-    name = "buck2-rust";
-    dontUnpack = true;
-    dontCheck = true;
-    nativeBuildInputs = [ makeWrapper ];
-    env = {
-      RUSTC = rustc;
-      CLIPPY = clippy;
-    };
-    buildPhase = ''
-      function capture_env() {
-          # variables to export, all variables with names beginning with one of these are exported
-          local -ar vars=(
-              NIX_CC_WRAPPER_TARGET_HOST_
-              NIX_CFLAGS_COMPILE
-              NIX_DONT_SET_RPATH
-              NIX_ENFORCE_NO_NATIVE
-              NIX_HARDENING_ENABLE
-              NIX_IGNORE_LD_THROUGH_GCC
-              NIX_LDFLAGS
-              NIX_NO_SELF_RPATH
-          )
-          for prefix in "''${vars[@]}"; do
-              for v in $( eval 'echo "''${!'"$prefix"'@}"' ); do
-                  echo "--set"
-                  echo "$v"
-                  echo "''${!v}"
-              done
-          done
-      }
-
-      # Same self-rpath bug as the cxx derivation above: strip -rpath $out/lib
-      # before capture so it doesn't leak into the RUNPATH of every binary
-      # linked by this toolchain. The $out/lib symlink exists for buck rules to
-      # embed a relative buck-out path, not to add an rpath.
-      NIX_LDFLAGS=$(echo "$NIX_LDFLAGS" | sed "s|-rpath $out/lib||g")
-
-      mkdir -p "$out/bin"
-      ln -s "$($RUSTC/bin/rustc --print sysroot)/lib" "$out/lib"
-
-      mapfile -t < <(capture_env)
-
-      makeWrapper "$RUSTC/bin/rustc" "$out/bin/rustc" "''${MAPFILE[@]}"
-      makeWrapper "$RUSTC/bin/rustdoc" "$out/bin/rustdoc" "''${MAPFILE[@]}"
-      makeWrapper "$CLIPPY/bin/clippy-driver" "$out/bin/clippy-driver" "''${MAPFILE[@]}"
-      makeWrapper "$CLIPPY/bin/cargo-clippy" "$out/bin/cargo-clippy" "''${MAPFILE[@]}"
-    '';
-
-    meta.description = "rust toolchain for buck2, similar in structure to buck2-toolchain.cxx";
-  };
-
-  inherit haskellPackages;
+  inherit haskellPackages haskellPackagesDrvPaths;
   inherit (hsPkgs) ghc;
 
   bash = writeShellScriptBin "bash" ''
@@ -178,6 +108,8 @@ in
     buck2-source # just so it gets uploaded to cache
     buildifier
     nix-prefetch-docker
+    podman
+    protobuf
     pyrefly-wrapper
     ripgrep
     skopeo
@@ -187,6 +119,10 @@ in
   inherit (hsPkgs)
     hspec-discover
     ;
+
+  # Expose snowydeer.build-container under the buck2 toolchain so that it can
+  # be referenced hermetically in build rules.
+  inherit snowydeer;
 
   cache-hook = cache-hook {
     destination = "s3://cache.oss.mercury.com";

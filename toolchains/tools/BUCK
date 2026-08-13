@@ -3,12 +3,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 python_bootstrap_binary(
-    name = "nix_wrapper",
-    main = "nix_wrapper.py",
-    visibility = ["PUBLIC"],
-)
-
-python_bootstrap_binary(
     name = "record_nix_path",
     main = "record_nix_path.py",
     visibility = ["PUBLIC"],
@@ -26,8 +20,27 @@ python_bootstrap_binary(
     visibility = ["PUBLIC"],
 )
 
+genrule(
+    name = "worker_pb2",
+    srcs = ["@toolchains//downloader:worker_proto"],
+    out = "worker_pb2.py",
+    bash = """
+        "$(exe @toolchains//:protoc)" --python_out="${OUT%/*}" -I "$SRCDIR" worker.proto
+    """,
+    cacheable = True,
+    # Without this caching doesn't work.
+    # See https://github.com/facebook/buck2/blob/2c50a40079a13dcb20cc81be5febb6b8c17db248/prelude/genrule.bzl#L178
+    labels = ["uses_protoc"],
+)
+
+python_bootstrap_library(
+    name = "buck2_worker_proto",
+    srcs = [":worker_pb2"],
+)
+
 python_bootstrap_binary(
-    name = "nix_drv_json",
-    main = "nix_drv_json.py",
-    visibility = ["toolchains//:"],
+    name = "nix_realiser_worker",
+    main = "nix_realiser_worker.py",
+    visibility = ["PUBLIC"],
+    deps = [":buck2_worker_proto"],
 )

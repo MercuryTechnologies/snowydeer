@@ -11,6 +11,10 @@ nix = nix
 none = none
 
 [cell_aliases]
+# this repo is not actually mercury-web-backend, but using the mwb name here
+# lets us unambiguously reference things in "our" root cell in other cells we
+# ship without conflicting with user-provided root cells.
+mwb = root
 config = prelude
 ovr_config = prelude
 fbcode = none
@@ -72,6 +76,19 @@ infer_target_names = true
 # shim-based one, or if someone has imported snowydeer from another project.
 [mercury]
 is_shim = true
+
+# NIX_CONFIG for tests that shell out to Nix themselves, currently only the
+# snowydeer container e2e test.
+# Context: normally we get the Nix substituters from nixConfig in flake.nix,
+# but we have non-flake usages of Nix that can't use that (e.g. snowydeer
+# container needs to use --arg which is unsupported in flakes). Those need the
+# settings passed explicitly so they hit build cache and don't rebuild the
+# world.
+#
+# N.B. only these two settings are supported at the moment.
+[nix]
+extra_substituters = https://cache.oss.mercury.com
+extra_trusted_public_keys = cache.oss.mercury.com-1:COfsgEgHMrBhMvGoLWuNH5RDgub3/MT32n8kK50m2dc=
 
 [build]
 execution_platforms = prelude//platforms:default

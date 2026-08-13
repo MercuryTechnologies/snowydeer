@@ -255,9 +255,10 @@ let
             diffutils
           ]
         }:$PATH
-        exe="@selfdir@/.buck-wrapped"
+        selfdir="@selfdir@"
+        exe="$selfdir/.buck-wrapped"
         # don't print the message if this redirection is a no-op
-        if [[ -n "$BUCK2_ROLLOUT_BIN" && -x "$BUCK2_ROLLOUT_BIN/buck" && "$BUCK2_ROLLOUT_BIN" != "$selfdir" ]]; then
+        if [ -n "$BUCK2_ROLLOUT_BIN" ] && [ -x "$BUCK2_ROLLOUT_BIN/buck" ] && [ "$BUCK2_ROLLOUT_BIN" != "$selfdir" ]; then
           exe="$BUCK2_ROLLOUT_BIN/buck"
           echo "buck2 wrapper: using $BUCK2_ROLLOUT_BIN/buck due to \$BUCK2_ROLLOUT_BIN" >&2
           unset BUCK2_ROLLOUT_BIN

@@ -22,35 +22,40 @@ DynamicHaskellNixInfo = provider(fields = {
     "packages": dict[str, NixDependency],
 })
 
-def __nix_build_drv(
+def __nix_realise_drv(
         actions: AnalysisActions,
-        nix_wrapper: RunInfo,
+        worker: WorkerInfo | None,
+        realiser: RunInfo,
         nix_config: dict[str, str | list[str]],
         drv: str,
         package: str,
-        deps) -> Artifact:
-    # calls nix build /path/to/file.drv^*
-
-    command = cmd_args(nix_wrapper, hidden = deps)
+        store_path: str) -> Artifact:
+    # Realises /path/to/file.drv^* and creates its `out.link`.
+    # Note there is deliberately no ordering between a package's action and its
+    # dependency actions. Mirroring Nix's dependency graph here is not needed for correctness.
     out_link = actions.declare_output(package, "out.link")
 
+    request = cmd_args(
+        "--drv",
+        drv,
+        "--store-path",
+        store_path,
+        "--out-link",
+        out_link.as_output(),
+    )
     for name, value in nix_config.items():
         if isinstance(value, list):
             value = " ".join(value)
-        command.add(["--option", name, value])
+        request.add(["--option", name, value])
 
-    nix_build = command.add([
-        "build",
-        "--print-build-logs",
-        cmd_args(drv, format = "{}^*"),
-        "--buck2-output",
-        out_link.as_output(),
-    ])
     actions.run(
-        nix_build,
+        request,
         category = "nix_build",
         identifier = package,
+        exe = WorkerRunInfo(worker = worker, exe = realiser.args),
         local_only = True,
+        # 0 allows the worker to manage batching.
+        weight_percentage = 0 if worker else 100,
         # Do not allow cache upload on these. It's imperative that nix builds are
         # always run locally so that the store paths are made to exist.
         allow_cache_upload = False,
@@ -101,13 +106,14 @@ def _dynamic_build_derivation_impl(actions: AnalysisActions, arg, drv_json: Arti
             nix_tsets[toolchain_libs[drv_dep]["name"]]
             for drv_dep in drv_info["deps"]
         ]
-        deps[drv] = __nix_build_drv(
+        deps[drv] = __nix_realise_drv(
             actions,
-            arg.nix_wrapper,
+            arg.realiser_worker,
+            arg.realiser,
             nix_config,
             package = name,
             drv = drv,
-            deps = [deps[dep] for dep in drv_info["deps"]],
+            store_path = drv_info["output"],
         )
 
         pkgs[name] = actions.tset(
@@ -167,12 +173,31 @@ _dynamic_build_derivation = dynamic_actions(
 
 def _make_drv_json(ctx: AnalysisContext, name: str) -> Artifact:
     # See Note [Redesigning Nix input-side integration] in nix_build.bzl.
-    nix_drv_json_script = ctx.attrs._nix_drv_json_script[RunInfo]
     flake = ctx.attrs.flake
 
     drv_json = ctx.actions.declare_output(name)
 
-    cmd = cmd_args(nix_drv_json_script, "--output", drv_json.as_output(), "--flake", cmd_args("path:", flake, "#haskellPackages", delimiter = ""))
+    # This is bash rather than e.g. python because the bootstrap python interpreter
+    # is realized from the flake, and we don't want to force a python nix build on the
+    # critical path for every Haskell build.
+    #
+    # post-build-hook is disabled because the haskellPackagesDrvPaths references every
+    # .drv in the package set, and we don't want to nix copy the entire closure to S3.
+    cmd = cmd_args(
+        "bash",
+        "-ec",
+        """
+        flake=$(nix store add-path --name source "$1")
+        drv_paths=$(nix build --no-link --print-out-paths --show-trace \
+            --no-update-lock-file --no-use-registries \
+            --option post-build-hook '' \
+            "path:$flake#haskellPackagesDrvPaths")
+        nix derivation show --stdin < "$drv_paths" > "$2"
+        """,
+        "--",
+        flake,
+        drv_json.as_output(),
+    )
 
     ctx.actions.run(
         cmd,
@@ -206,7 +231,8 @@ def _get_nix_config(ctx: AnalysisContext) -> Artifact:
 def _build_packages_info(ctx: AnalysisContext, drv_json: Artifact, ghc_info: Artifact, nix_config_json: Artifact) -> DynamicValue:
     dyn_pkgs_info = ctx.actions.dynamic_output_new(_dynamic_build_derivation(
         arg = struct(
-            nix_wrapper = ctx.attrs._nix_wrapper[RunInfo],
+            realiser = ctx.attrs._nix_realiser_worker[RunInfo],
+            realiser_worker = ctx.attrs._nix_realiser_worker.get(WorkerInfo),
         ),
         ghc_info = ghc_info,
         drv_json = drv_json,
@@ -288,13 +314,9 @@ nix_haskell_toolchain = rule(
             providers = [RunInfo],
             default = "@buck2-haskell//tools:script_template_processor",
         ),
-        "_nix_wrapper": attrs.dep(
+        "_nix_realiser_worker": attrs.dep(
             providers = [RunInfo],
-            default = "toolchains//tools:nix_wrapper",
-        ),
-        "_nix_drv_json_script": attrs.dep(
-            providers = [RunInfo],
-            default = "toolchains//tools:nix_drv_json",
+            default = "toolchains//:nix_realiser_worker",
         ),
         "compiler_flags": attrs.list(
             attrs.string(),

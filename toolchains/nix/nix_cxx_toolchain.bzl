@@ -3,8 +3,18 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 """
-"C++" toolchain for buck2; in practice, a linker and a C preprocessor.
-We actually don't know if it knows how to build any C++, we don't use that part.
+"C++" toolchain for buck2: a preprocessor, C++ compiler, and linker, primarily
+used for not-C++. We're slowly working on making it better at building C++ as
+we migrate more Haskell libs using C to buck2.
+
+Chains of shared libraries (`bin -> libB.so -> libA.so`) don't work with this
+toolchain: ld.bfd resolves a shared library's own shared library deps, which the
+prelude never puts on the link line, and glibc can't find them at runtime either
+since nixpkgs' binutils emits DT_RUNPATH, which isn't inherited down the loader
+chain. Both problems go away with lld or gold, so we don't paper over them with
+`--allow-shlib-undefined` and `--disable-new-dtags` on every link.
+
+(ld.bfd is the GNU linker, and it is both slow and busted. we need to migrate off of it tbh)
 """
 
 load(
@@ -91,7 +101,15 @@ def _nix_cxx_toolchain(ctx: AnalysisContext) -> list[Provider]:
                 static_pic_dep_runtime_ld_flags = [],
                 shared_dep_runtime_ld_flags = [],
                 independent_shlib_interface_linker_flags = [],
-                shlib_interfaces = ShlibInterfacesMode("stub_from_library"),
+                # Interfaces only save relinking rdeps whose symbols didn't change,
+                # and producing them needs a tool (e.g. llvm-ifs) that we
+                # currently don't ship.
+                #
+                # Interfaces hollow out a .so file from all the actual code, so
+                # there's just symbols remaining (thus, you don't rebuild
+                # dependents when only implementation changes). Similar
+                # technique as Bazel does with Java interface JARs.
+                shlib_interfaces = ShlibInterfacesMode("disabled"),
                 link_style = LinkStyle(ctx.attrs.link_style),
                 link_weight = 1,
                 binary_extension = binary_extension,
@@ -139,7 +157,10 @@ def _nix_cxx_toolchain(ctx: AnalysisContext) -> list[Provider]:
             llvm_link = llvm_link,
             internal_tools = ctx.attrs._internal_tools[CxxInternalTools],
             # https://github.com/facebook/buck2-prelude/blob/f184f677e6a11579ee29ba126810833cf904ce6e/cxx/cxx_toolchain_types.bzl#L227-L236
-            runtime_dependency_handling = RuntimeDependencyHandling("no_symlink"),
+            # `no_symlink` only builds the rpath tree under shared linking, so a
+            # `preferred_linkage = "shared"` dep produces binaries that can't find
+            # their libraries once you switch to `link_style[static_pic]`.
+            runtime_dependency_handling = RuntimeDependencyHandling("symlink"),
         ),
         CxxPlatformInfo(name = "aarch64" if host_info().arch.is_aarch64 else "x86_64"),
     ]

@@ -1,0 +1,70 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * SPDX-License-Identifier: MIT OR Apache-2.0
+ *
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
+ */
+
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.facebook.buck.worker.model";
+option java_outer_classname = "WorkerProto";
+
+package worker;
+
+message ExecuteCommand {
+  message EnvironmentEntry {
+    bytes key = 1;
+    bytes value = 2;
+  }
+
+  repeated bytes argv = 1;
+  repeated EnvironmentEntry env = 2;
+  optional uint64 timeout_s = 3;
+}
+
+message ExecuteResponse {
+  int32 exit_code = 1;
+  string stderr = 2;
+  optional uint64 timed_out_after_s = 3;
+}
+
+message ExecuteCancel {}
+
+message ExecuteEvent {
+  oneof data {
+    ExecuteCommand command = 1;
+    ExecuteCancel cancel = 2;
+  }
+}
+
+service Worker {
+  // TODO(ctolliday) delete once workers switch to Exec
+  rpc Execute(ExecuteCommand) returns (ExecuteResponse) {};
+
+  rpc Exec(stream ExecuteEvent) returns (ExecuteResponse) {};
+}
+
+message ExecuteCommandStream {
+  ExecuteCommand request = 1;
+  uint64 id = 2;
+}
+
+message ExecuteResponseStream {
+  ExecuteResponse response = 1;
+  uint64 id = 2;
+}
+
+// This is its own interface because it significantly complicates worker
+// implementation. Most workers do not need streaming, nor do they benefit from
+// it.
+service WorkerStreaming {
+  rpc ExecuteStream(stream ExecuteCommandStream)
+      returns (stream ExecuteResponseStream) {};
+}

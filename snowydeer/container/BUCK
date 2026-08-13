@@ -8,6 +8,10 @@ command_alias(
         "--skopeo-exe=$(exe toolchains//:skopeo)",
         "--nix-prefetch-docker-exe=$(exe toolchains//:nix-prefetch-docker)",
         "--buildozer-exe=$(exe toolchains//:buildifier[buildozer])",
+        # Hermetically pass in the nix infrastructure. This allows us to use the
+        # nixConfig from the nix flake and delete one of the many hermeticity
+        # problems from the snowydeer e2e tests.
+        "--nix-flake=$(location nix//:nix_overlays)",
     ],
     exe = "//snowydeer/container/src/Snowydeer/Container:container_unwrapped",
     # used by //snowydeer:container.bzl

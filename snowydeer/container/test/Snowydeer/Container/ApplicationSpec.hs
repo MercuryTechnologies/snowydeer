@@ -18,7 +18,6 @@ import RIO
 import RIO.Process (mkDefaultProcessContext)
 import Snowydeer.Container.Application hiding (main)
 import Snowydeer.Container.Metadata.Types
-import Snowydeer.Container.Types
 import System.Environment (lookupEnv)
 import Test.Hspec
 import Text.Shakespeare.Text (st)
@@ -31,17 +30,13 @@ testApp =
     , config = mempty
     , stubs =
         Stubs
-          { doTargetsToNix = \targets -> pure $ StorePath . (\p -> "/nix/store/" <> buckToNixPath p) <$> targets
-          , doGitRevInfo = pure GitRevInfo {revision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+          { doGitRevInfo = pure GitRevInfo {revision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
           , doNixPrefetchDocker = error "don't call nix-prefetch-docker in these tests"
           , doNixBuild = error "don't call nix build in these tests"
           }
     }
-  where
-    -- This is very much not a correct procedure but we can trick the code, it's ok.
-    buckToNixPath = T.replace "/" "_" . T.replace ":" "_"
 
-testPlan :: BuildPlan UncheckedMetadata InputPath
+testPlan :: BuildPlan UncheckedMetadata
 testPlan =
   BuildPlan
     { name = "service"
@@ -49,8 +44,8 @@ testPlan =
     , env = HashMap.fromList [("a", "b"), ("GIT_SHA1", "stale revision")]
     , ports = Set.fromList []
     , -- TODO: should mainContents be a strict superset of contents? probably, right? or should contents be called otherContents?
-      contents = [InputBuckTarget "//foo/bar:tgt", InputStorePath "/nix/store/whatever-meow"]
-    , mainContents = [InputBuckTarget "cell//bar/baz:blah"]
+      contents = ["/nix/store/aaaa-tgt", "/nix/store/whatever-meow"]
+    , mainContents = ["/nix/store/bbbb-blah"]
     , metadata = HashMap.fromList [("com.mercury.engineering.team", "BEDUX"), ("com.mercury.runbook.url", "https://example.com"), ("org.opencontainers.image.description", "foo")]
     , baseImage = Nothing
     }
@@ -64,8 +59,7 @@ testAppM = provideCallStack $ runRIO testApp
 fakeNixPrefetchDockerStubs :: Stubs
 fakeNixPrefetchDockerStubs =
   Stubs
-    { doTargetsToNix = error "not used in updateBaseImage"
-    , doGitRevInfo = error "not used in updateBaseImage"
+    { doGitRevInfo = error "not used in updateBaseImage"
     , doNixPrefetchDocker = \args ->
         case (args.os, args.dockerArch) of
           ("linux", "amd64") ->
@@ -152,12 +146,12 @@ startingSpec buckPath =
 spec :: Spec
 spec = do
   describe "container builder" do
-    it "translates contents to nix" $ testAppM do
+    it "folds mainContents into contents" $ testAppM do
       gitInfo <- Monad.join (asksStub doGitRevInfo)
       plan <- (.plan) <$> planify gitInfo testPlan
       -- deals with putting stuff in mainContents without putting it in contents
-      liftIO $ plan.contents `shouldBe` ["/nix/store/cell__bar_baz_blah", "/nix/store/__foo_bar_tgt", "/nix/store/whatever-meow"]
-      liftIO $ plan.mainContents `shouldBe` ["/nix/store/cell__bar_baz_blah"]
+      liftIO $ plan.contents `shouldBe` ["/nix/store/bbbb-blah", "/nix/store/aaaa-tgt", "/nix/store/whatever-meow"]
+      liftIO $ plan.mainContents `shouldBe` ["/nix/store/bbbb-blah"]
 
     it "has the git revision in metadata and the container environment" $ testAppM do
       gitInfo <- Monad.join (asksStub doGitRevInfo)
@@ -173,7 +167,7 @@ spec = do
       plan <- planify gitInfo testPlan
 
       let j = A.toJSON plan
-          Right planItself = A.parseEither (A.parseJSON @(BuildPlan UncheckedMetadata StorePath)) j
+          Right planItself = A.parseEither (A.parseJSON @(BuildPlan UncheckedMetadata)) j
           -- Don't want to write a parser instance for pipelines as it might
           -- diverge. This test is rather unsatisfying as a result.
           Right layeringPipelineValue = A.parseEither (A.withObject "ExportBuildPlan" \v -> v A..: "layeringPipeline") j

@@ -14,4 +14,4 @@ buck2-haskell = git
 # Submit changes on our OSS Gerrit: https://gerrit.oss.mercury.com/q/status:open+-is:wip
 git_origin = https://github.com/MercuryTechnologies/buck2-haskell.git
 # branch: mercury
-commit_hash = 13a4547e1fdae7436919bd8b4f001da9d4f99503
+commit_hash = 91eeb7779b93304ff01d4ea40cf090e27b0dc7c3

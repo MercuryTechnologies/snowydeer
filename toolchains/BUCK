@@ -52,6 +52,12 @@ nix_haskell_toolchain(
     visibility = ["PUBLIC"],
 )
 
+alias(
+    name = "nix_realiser_worker",
+    actual = "toolchains//tools:nix_realiser_worker",
+    visibility = ["PUBLIC"],
+)
+
 nix_build(
     name = "ghc",
     binaries = [
@@ -102,6 +108,14 @@ nix_build(
     visibility = ["PUBLIC"],
 )
 
+nix_build(
+    name = "protoc",
+    attr = "protobuf",
+    binary = "protoc",
+    flake = "@nix//:nix_overlays",
+    visibility = ["PUBLIC"],
+)
+
 # This creates a list of nix paths corresponding to the listed buck2 target items
 # derived from nix flakes. With [upload] subtarget, those nix paths can be
 # automatically uploaded to S3 nix cache by cache-hook script.
@@ -118,6 +132,7 @@ flake_nix_paths(
         "toolchains//:hspec-discover",
         "toolchains//:nix_cxx",
         "toolchains//:nix_rust",
+        "toolchains//:protoc",
         "toolchains//:pyrefly",
         "toolchains//:python_bootstrap_interpreter",
         "toolchains//:ripgrep",

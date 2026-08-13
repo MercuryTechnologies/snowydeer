@@ -48,6 +48,21 @@ Run a `nix build` command for a given `flake` and `attr` to build.
 #    the things *or* have a connection pool to at least avoid nix-daemon-side
 #    connection setup costs.
 
+def _nix_realise_worker_impl(ctx: AnalysisContext) -> list[Provider]:
+    exe = ctx.attrs.exe[RunInfo].args
+    return [
+        DefaultInfo(),
+        WorkerInfo(exe = exe),
+        RunInfo(args = exe),
+    ]
+
+nix_realise_worker = rule(
+    impl = _nix_realise_worker_impl,
+    attrs = {
+        "exe": attrs.dep(providers = [RunInfo]),
+    },
+)
+
 def _out_link_name(output: str) -> str:
     if output == "out":
         # Even if `out` isn't the default output _and_ it's specified
@@ -114,21 +129,28 @@ def _nix_build_impl(ctx: AnalysisContext):
         hidden = [out_link.as_output()] + [link.as_output() for link in extra_out_links],
     )
 
-    nix_build = cmd_args([
-        "env",
-        "--",  # this is needed to avoid "Spawning executable `nix` failed: Failed to spawn a process"
-        "nix",
-        "build",
-        "--print-build-logs",
-        "--show-trace",
-        # --no-update-lock-file: if the flake.lock file does not match the flake.nix, error out.
-        # This prevents highly baffling behaviour that should be done by the user rather than by buck2.
-        "--no-update-lock-file",
-        # Don't use flake registries if someone omits something from `inputs.*` but puts it in `outputs` args.
-        "--no-use-registries",
-        cmd_args("--out-link", out_link_for_nix),
-        cmd_args(cmd_args(flake, attr_suffix, delimiter = "#"), absolute_prefix = "path:"),
-    ])
+    # Adding the flake to the store before evaluating lets the eval cache apply
+    # to this action. Since buck2 re-materializes the flake artifact after every
+    # daemon restart, nix using that directly would mean a fresh mtime each time
+    # and no eval cache. In the store, only the content matters as mtime is fixed.
+    #
+    # `--no-update-lock-file`: require flake.lock to match flake.nix
+    # `--no-use-registries`: don't use flake registries if someone omits something
+    # from `inputs.*` but puts it in `outputs` args.
+    nix_build = cmd_args(
+        "bash",
+        "-ec",
+        """
+        flake=$(nix store add-path --name source "$1")
+        exec nix build --print-build-logs --show-trace \
+            --no-update-lock-file --no-use-registries \
+            --out-link "$2" "path:$flake#$3"
+        """,
+        "--",
+        flake,
+        out_link_for_nix,
+        attr_suffix,
+    )
     ctx.actions.run(
         nix_build,
         category = "nix_build",
@@ -147,16 +169,14 @@ def _nix_build_impl(ctx: AnalysisContext):
         )
 
     nix_dynamic_infos = {
-        output: NixDynamicInfo(dynamic = _read_out_link(ctx, link, output))
+        output: _read_out_link(ctx, link, output)
         for output, link in output_links.items()
     }
 
     if primary_output != None and primary_output in nix_dynamic_infos:
         nix_dynamic_info = nix_dynamic_infos[primary_output]
     else:
-        nix_dynamic_info = NixDynamicInfo(
-            dynamic = _read_out_link(ctx, out_link, None),
-        )
+        nix_dynamic_info = _read_out_link(ctx, out_link, None)
 
     sub_targets = {
         bin: [DefaultInfo(default_output = out_link), RunInfo(args = cmd_args(out_link, "bin", bin, delimiter = "/"))]
@@ -211,22 +231,31 @@ nix_build = rule(
     },
 )
 
-def _read_out_link_dynamic_impl(
+def _read_nix_path_dynamic_impl(
         # starlark-lint-disable unused-argument
         actions: AnalysisActions,  # @unused
-        read_link):
-    nix_path = read_link.read_string()
-    return [NixPathInfo(path = nix_path)]
+        path_file):
+    return [NixPathInfo(path = path_file.read_string().strip())]
 
-_read_out_link_dynamic = dynamic_actions(
-    impl = _read_out_link_dynamic_impl,
+_read_nix_path_dynamic = dynamic_actions(
+    impl = _read_nix_path_dynamic_impl,
     attrs = {
-        "read_link": dynattrs.artifact_value(),
+        "path_file": dynattrs.artifact_value(),
     },
 )
 
+def nix_dynamic_info_from_path_file(actions: AnalysisActions, path_file: Artifact) -> Provider:
+    """
+    The canonical way to build a `NixDynamicInfo` for a target that has already
+    written its absolute /nix/store path into a file, whatever produced it.
+    """
+    return NixDynamicInfo(
+        dynamic = actions.dynamic_output_new(_read_nix_path_dynamic(path_file = path_file)),
+        path_file = path_file,
+    )
+
 # FIXME(jadel): this is duplicate logic as in haskell/mercury_haskell.bzl. Needs to be DRY'd up eventually.
-def _read_out_link(ctx: AnalysisContext, out_link: Artifact, output: str | None) -> DynamicValue:
+def _read_out_link(ctx: AnalysisContext, out_link: Artifact, output: str | None) -> Provider:
     read_link = ctx.actions.declare_output("read_link" if output == None else "read_link-{}".format(output))
     ctx.actions.run(
         cmd_args("bash", "-ec", """readlink $1 | tr -d '\\n' > $2""", "--", out_link, read_link.as_output()),
@@ -236,11 +265,7 @@ def _read_out_link(ctx: AnalysisContext, out_link: Artifact, output: str | None)
         allow_cache_upload = False,
     )
 
-    dyn_nix_path = ctx.actions.dynamic_output_new(_read_out_link_dynamic(
-        read_link = read_link,
-    ))
-
-    return dyn_nix_path
+    return nix_dynamic_info_from_path_file(ctx.actions, read_link)
 
 BinDirInfo = provider(
     doc = """Provides the path of the `/bin` directory of a derivation output.""",
@@ -258,6 +283,10 @@ NixDynamicInfo = provider(
     doc = """Provides nix-side dynamic information. Contains a NixPathInfo provider.""",
     fields = {
         "dynamic": DynamicValue,
+        # Same store path as `NixPathInfo.path`, but as a file. Reading the
+        # dynamic requires being inside a dynamic action, whereas the file can
+        # go straight onto a command line assembled during analysis.
+        "path_file": Artifact,
     },
 )
 

@@ -8,35 +8,18 @@ correct Nix-level dependencies.
 """
 
 load("@prelude//utils:utils.bzl", "flatten")
-load("@toolchains//nix/nix_build.bzl", "NixDepsTsetProvider", "NixDynamicDepsTset", "NixPathInfo", "collect_all_nix_output_dynamics_for_target")
+load("@toolchains//nix/nix_build.bzl", "NixDynamicInfo")
+load("//snowydeer:snowydeer_import.bzl", "collect_nix_dynamics", "declare_snowydeer_import", "dump_nix_paths_dynamic_impl")
 
 def _dump_nix_paths_dynamic_impl(
         bxl_ctx: bxl.Context,
         list_of_packages: OutputArtifact,
         dyn_nix_paths: list[ResolvedDynamicValue]) -> list[Provider]:
-    actions = bxl_ctx.bxl_actions().actions
-
-    paths = []
-    all_tsets = []
-    for item in dyn_nix_paths:
-        providers = item.providers
-        if NixDepsTsetProvider in providers:
-            all_tsets.append(providers[NixDepsTsetProvider].deps)
-        if NixPathInfo in providers:
-            paths.append(providers[NixPathInfo].path)
-
-    # Can't do this more correct design because of https://github.com/facebook/buck2/issues/683
-    # every_package = actions.tset(NixDepsTset, children = all_tsets)
-    # We will probably just have some duplicates. It's fine, we will eat them
-    # in the Python script.
-    json = {
-        "paths_old": paths,
-        "paths_new": [tset.project_as_json("all_output_paths") for tset in all_tsets],
-    }
-
-    actions.write_json(list_of_packages, json)
-
-    return []
+    return dump_nix_paths_dynamic_impl(
+        bxl_ctx.bxl_actions().actions,
+        list_of_packages,
+        dyn_nix_paths,
+    )
 
 _dump_nix_paths_dynamic = bxl.dynamic_actions(
     impl = _dump_nix_paths_dynamic_impl,
@@ -54,60 +37,33 @@ def _import_store_path(ctx: bxl.Context, bxl_actions: bxl.Actions, cquery: bxl.C
     """
     sanitized_name = str(configured_target.label.raw_target()).replace("/", "_").replace(":", "_")
     actions = bxl_actions.actions
-    list_of_paths = actions.declare_output("all_nix_paths_{}.json".format(sanitized_name))
-
     deps = cquery.deps(configured_target)
     deps_analysis = ctx.analysis(deps)
     target_analysis = ctx.analysis(configured_target)
 
     default_info = target_analysis.providers()[DefaultInfo]
 
-    all_dynamics = []
-    for (_which, dep) in deps_analysis.items():
-        providers = dep.providers()
-
-        # All of the outputs, not just the default one. `cquery` hands us
-        # configured *targets*, so a dep written as
-        # `//toolchains:openssl_nix[dev]` arrives here as plain
-        # `//toolchains:openssl_nix`. Thus we need the nix paths from all
-        # subtargets.
-        all_dynamics.extend(collect_all_nix_output_dynamics_for_target(providers))
-
-        if NixDynamicDepsTset in providers:
-            all_dynamics.append(providers[NixDynamicDepsTset].dynamic)
-
-    actions.dynamic_output_new(_dump_nix_paths_dynamic(
-        dyn_nix_paths = all_dynamics,
-        list_of_packages = list_of_paths.as_output(),
-    ))
-
-    # This is expected to be a //snowydeer:package.bzl target; we currently
-    # don't have ways for other targets to request that they add things to the
-    # package target, but such functionality is basically only required for
-    # shared libs (which we're not using) and should be implemented in
-    # package.bzl.
-    out = actions.declare_output("store_path_{}".format(sanitized_name))
-    actions.run(
-        cmd_args(
-            bxl_actions.exec_deps[build_store_path][RunInfo],
-            "--artifact",
-            default_info.default_outputs[0],
-            "--paths-json",
-            list_of_paths,
-            # FIXME(jadel): configurability of names?
-            "--name",
-            configured_target.label.name,
-            "--write-path-to",
-            out.as_output(),
-        ),
-        category = "snowydeer_import",
+    store_path = declare_snowydeer_import(
+        actions = actions,
+        artifact = default_info.default_outputs[0],
+        build_store_path = bxl_actions.exec_deps[build_store_path][RunInfo],
+        dump_nix_paths_dynamic = _dump_nix_paths_dynamic,
         identifier = str(configured_target.label),
-        local_only = True,
-        # Soundness: this *must* not be uploaded as it needs to happen on the
-        # same machine as the further usage.
-        allow_cache_upload = False,
+        name = configured_target.label.name,
+        nix_dynamics = collect_nix_dynamics([
+            dep.providers()
+            for (_which, dep) in deps_analysis.items()
+        ]),
+        output_suffix = sanitized_name,
     )
-    return ctx.output.ensure(out)
+    return ctx.output.ensure(store_path)
+
+def _existing_store_path(ctx: bxl.Context, configured_target):
+    providers = ctx.analysis(configured_target).providers()
+    store_path = providers[DefaultInfo].sub_targets.get("store_path")
+    if store_path != None and NixDynamicInfo in store_path:
+        return ctx.output.ensure(store_path[DefaultInfo].default_outputs[0])
+    return None
 
 def _collect_nix_deps(ctx: bxl.Context):
     # Use cquery without explicit platform - will use configured targets from CLI
@@ -143,7 +99,9 @@ def _collect_nix_deps(ctx: bxl.Context):
     # line, rather than the transitioned one?
     configured_targets = ctx.target_universe(targets, modifiers = ctx.modifiers).target_set()
     for configured_target in configured_targets:
-        result = _import_store_path(ctx = ctx, bxl_actions = bxl_actions, cquery = cquery, build_store_path = build_store_path, configured_target = configured_target)
+        result = _existing_store_path(ctx, configured_target)
+        if result == None:
+            result = _import_store_path(ctx = ctx, bxl_actions = bxl_actions, cquery = cquery, build_store_path = build_store_path, configured_target = configured_target)
         ctx.output.print(result)
 
 main = bxl.main(

@@ -13,6 +13,7 @@ data Opts = Opts
   { skopeoExe :: FilePath
   , nixPrefetchDockerExe :: FilePath
   , buildozerExe :: FilePath
+  , nixFlake :: Maybe FilePath
   , verbose :: Bool
   , subcommand :: Subcommand
   }
@@ -94,6 +95,7 @@ options =
       skopeoExe <- strOption (long "skopeo-exe" <> value "skopeo" <> help "Path to a skopeo executable. Defaults to looking in PATH")
       nixPrefetchDockerExe <- strOption (long "nix-prefetch-docker-exe" <> value "nix-prefetch-docker" <> help "Path to nix-prefetch-docker. Defaults to looking in PATH")
       buildozerExe <- strOption (long "buildozer-exe" <> value "buildozer" <> help "Path to buildozer. Defaults to looking in PATH")
+      nixFlake <- optional $ strOption (long "nix-flake" <> help "Path to the nix// flake. Defaults to $PWD/nix")
       verbose <- switch (short 'v' <> long "verbose" <> help "Enable verbose logging")
       subcommand <- subcmds
       pure Opts {..}

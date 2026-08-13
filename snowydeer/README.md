@@ -10,12 +10,10 @@ Snowydeer is a conversion tool between buck2 targets and Nix store paths.
 It also has a container building tool (see the [Containers](#containers) section).
 
 It's used as part of deploying buck2 built artifacts to servers.
-It operates in five stages:
-- A package target is defined using `//snowydeer:package.bzl`, which creates a file tree with the desired contents as a normal buck target
-
-  Notably this builds static binaries for everything in `binaries` so that they don't depend on GHC or have issues with dynamic linked deps.
-- `snowydeer.bxl` finds all the candidate nix dependencies in the buck2 dependency graph of the desired target
+- A package target is defined using `snowydeer_package` from `//snowydeer:package.bzl`, which creates a file tree with the desired contents as a normal buck target you can `buck build`, alongside Nix providers akin to those in `nix_build` targets
+- The `snowydeer_package` rule's Nix machinery finds all candidate Nix dependencies its contents could have observed in its configured Buck2 target graph
 - `build_store_path` turns that target's output into a NAR and reference scans to find what the dependencies should be
+- `import_ca` imports the store path given a known list of references and a NAR file
 - The NAR is imported into the Nix store via [Lix 2.95's --references-list-json][lix-ca] or `import_ca`.
 
 [lix-ca]: https://gerrit.lix.systems/c/lix/+/5205
@@ -38,11 +36,19 @@ From here, you can try out parts of the Snowydeer system.
 
 Define a `snowydeer_package` Buck target (works on other targets, there's nothing special about them, but they give you a bin directory with static binaries).
 
-Then:
+Build the `store_path` subtarget and read its output:
 
 ```
-$ cat "$(buck bxl //snowydeer:snowydeer.bxl:main -- --target //snowydeer/demo:hello_pkg)"
+$ cat "$(buck build //snowydeer/demo:hello_pkg[store_path] --show-simple-output)"
 /nix/store/wgmy5n9902wdxc8805zw4xjnnx26cwv4-hello_pkg
+```
+
+The package target also exposes `NixDynamicInfo`, so other Buck2 rules can consume the imported store path directly.
+The BXL remains available, primarily for importing arbitrary targets for testing (though we intend that people will primarily use `snowydeer_package` targets):
+
+```
+$ cat "$(buck bxl //snowydeer:snowydeer.bxl:main -- --target //snowydeer/demo:hello)"
+/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-hello
 ```
 
 Result: a content addressed store path with the correct references, based on the buck2 target:
@@ -166,6 +172,9 @@ snowydeer_container(
 
     # contents= in Nix docker tools; will be symlinked into the root of the container.
     # This is a set of paths in addition to `main_contents`.
+    #
+    # Every entry must already know its own Nix store path, i.e. be a
+    # `snowydeer_package` or a `nix_build`.
     contents = [
         # Snowydeer package dependencies
         ":hello_pkg",
@@ -196,7 +205,7 @@ snowydeer_container(
 
 ## How does it work?
 
-First, `container.bzl` creates a JSON file of the necessary data from Buck2 (included targets and their kind) to give to Snowydeer Container.
+First, `container.bzl` creates a JSON file of the necessary data from Buck2 (the store paths of the included targets, plus the image metadata) to give to Snowydeer Container.
 Snowydeer Container processes that information further and then calls Nix to build a `streamLayeredImage` streaming script.
 Finally, it invokes that script to stream a tarball, either into a registry with the `copy` command or to stdout for `podman load` with the `save` command.
 

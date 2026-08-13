@@ -4,9 +4,9 @@
 
 # shellcheck shell=bash
 
-if (( "$#" < 1 )); then
-    >&2 echo "$0: Not enough args"
-    exit 1
+if (("$#" < 1)); then
+  >&2 echo "$0: Not enough args"
+  exit 1
 fi
 
 pyrefly buck-check "$@"

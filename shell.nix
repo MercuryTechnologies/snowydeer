@@ -6,10 +6,8 @@
 let
   lockFile = builtins.fromJSON (builtins.readFile ./nix/flake.lock);
   flake-compat-node = lockFile.nodes.${lockFile.nodes.root.inputs.flake-compat};
-  flake-compat = builtins.fetchTarball {
-    url = "https://github.com/${flake-compat-node.locked.owner}/${flake-compat-node.locked.repo}/archive/${flake-compat-node.locked.rev}.tar.gz";
-    sha256 = flake-compat-node.locked.narHash;
-  };
+  # `fetchTree`, not `fetchTarball`: see ./default.nix.
+  flake-compat = builtins.fetchTree flake-compat-node.locked;
 
   flake = (
     import flake-compat {

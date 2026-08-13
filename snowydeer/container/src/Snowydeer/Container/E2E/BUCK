@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+load("//haskell:mercury_haskell.bzl", "mercury_haskell_library")
+
+mercury_haskell_library(
+    name = "E2E",
+    srcs = glob(["*.hs"]),
+    target_compatible_with = ["prelude//os:linux"],
+    visibility = ["//snowydeer/container/test/..."],
+    deps = [
+        "//haskell:aeson",
+        "//haskell:bytestring",
+        "//haskell:containers",
+        "//haskell:rio",
+        "//haskell:text",
+    ],
+)

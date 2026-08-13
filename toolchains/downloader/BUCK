@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+export_file(
+    name = "worker_proto",
+    src = "proto/worker.proto",
+    out = "worker.proto",
+    visibility = ["toolchains//tools:"],
+)

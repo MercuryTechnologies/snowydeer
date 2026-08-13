@@ -69,6 +69,17 @@ def cache_toolchain(upload_mode: UploadMode, buck2: Buck2):
     buck2.build([toolchain_target, haskell_target])
 
 
+ENV_ALLOWLIST = {
+    "PATH",
+    "USER",
+    "LOGNAME",
+    "HOME",
+    "TMPDIR",
+    # systemd and various other things need this
+    "XDG_RUNTIME_DIR",
+}
+
+
 def reexec_copybara(
     ci: CiActions, copybara_target: str, ci_run_target: str, args: list[str] = []
 ):
@@ -79,11 +90,16 @@ def reexec_copybara(
     if not is_full_mercury_repo(ci):
         raise ValueError("--copybara only works in the full Mercury repo")
 
+    # The nix builds below are non-flake (-f), so they don't pick up the
+    # export's nixConfig. Without this they can't substitute from cache.oss and
+    # rebuild buck2 from source on every run.
+    setup_nix_config(ci)
+
     with TemporaryDirectory("-copybara-ci") as d:
         buck2 = Buck2(ci)
         buck2.run(copybara_target, ["--folder-dir", d], capture_err=True)
 
-        new_buck2 = ci.run_subprocess(
+        buck2_store_path = ci.run_subprocess(
             [
                 "nix",
                 "build",
@@ -94,14 +110,16 @@ def reexec_copybara(
             ],
             capture_output=True,
         ).stdout_s.strip()
-        new_buck2 += "/bin/buck"
-        # FIXME(jadel): for realism, this needs to actually delete 90%
-        # of env including most but not all of PATH. ummm. not sure the best
-        # way.
+        new_buck2 = buck2_store_path + "/bin/buck"
+        # FIXME(jadel): delete more of PATH as if you run it from the mercury
+        # repo, you get a *lot* of assorted stuff.
+        filtered_env = {k: v for k, v in os.environ.items() if k in ENV_ALLOWLIST}
 
         print(">>> In exported repo")
         # Call ourselves, but in the new universe.
-        subprocess.check_call([new_buck2, "run", ci_run_target, "--", *args], cwd=d)
+        subprocess.check_call(
+            [new_buck2, "run", ci_run_target, "--", *args], cwd=d, env=filtered_env
+        )
 
 
 NIX_DATA_HOME = (

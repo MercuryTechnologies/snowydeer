@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+load("//haskell:haskell_spec.bzl", "local_packages_spec")
+
+local_packages_spec(
+    name = "podman_sandbox_spec",
+    srcs = ["PodmanSandboxSpec.hs"],
+    env = {
+        "PODMAN_BIN": "$(exe toolchains//:podman)",
+    },
+    # Spinning up podman is a lot more resource use than a normal unit test.
+    labels = ["large"],
+    main = "Snowydeer.Container.E2E.PodmanSandboxSpec",
+    target_compatible_with = ["prelude//os:linux"],
+    deps = [
+        "//haskell:aeson",
+        "//haskell:base",
+        "//haskell:bytestring",
+        "//haskell:hspec",
+        "//haskell:rio",
+        "//haskell:text",
+        "//snowydeer/container/src/Snowydeer/Container/E2E",
+    ],
+)

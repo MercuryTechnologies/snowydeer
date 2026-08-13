@@ -8,6 +8,7 @@ imported into the nix store.
 """
 
 load("@prelude//cfg/modifier:name.bzl", "cfg_name")
+load("//snowydeer:snowydeer_import.bzl", "snowydeer_import")
 
 def _transition_impl(ctx: AnalysisContext):
     automatic_value = ctx.attrs.automatic_value[ConstraintValueInfo]
@@ -61,10 +62,11 @@ transition = rule(
     is_configuration_rule = True,
 )
 
-def _snowydeer_package_impl(ctx: AnalysisContext) -> list[Provider]:
+def _snowydeer_package_artifact_impl(ctx: AnalysisContext) -> list[Provider]:
     # we might still have to write this as a thing that calls a python
-    # executable at some point if we want to do rpath patching, but until that
-    # happens, might as well try just doing it in starlark
+    # executable at some point if we want to do rpath patching (or patching
+    # interpreters of python stuff so we can ship python to prod), but until
+    # that happens, might as well try just doing it in starlark
 
     output_dir = ctx.actions.declare_output("out_dir", dir = True)
     binaries = ctx.attrs.extra_files
@@ -78,8 +80,8 @@ def _snowydeer_package_impl(ctx: AnalysisContext) -> list[Provider]:
         DefaultInfo(default_outputs = [output_dir]),
     ]
 
-snowydeer_package = rule(
-    impl = _snowydeer_package_impl,
+_snowydeer_package_artifact = rule(
+    impl = _snowydeer_package_artifact_impl,
     doc = """
     Packages some targets into a directory such that it can be imported into
     the Nix store.
@@ -105,3 +107,42 @@ snowydeer_package = rule(
         ),
     },
 )
+
+def snowydeer_package(
+        name: str,
+        binaries,
+        extra_files = {},
+        target_compatible_with = [],
+        exec_compatible_with = [],
+        compatible_with = [],
+        default_target_platform = None,
+        **kwargs):
+    # This uses two separate targets since `attrs.query()` cannot transition
+    # configurations itself.
+    # Thus, you need a second target which is *already* in the intended
+    # configuration to match the configurations of the query and the
+    # `attrs.dep()`. In other words, we cannot use a `attrs.transition_dep()`
+    # in the same rule as the `attrs.query()` and get the same configuration
+    # between the two.
+    artifact_name = name + "__snowydeer_artifact"
+    _snowydeer_package_artifact(
+        name = artifact_name,
+        binaries = binaries,
+        compatible_with = compatible_with,
+        default_target_platform = default_target_platform,
+        exec_compatible_with = exec_compatible_with,
+        extra_files = extra_files,
+        target_compatible_with = target_compatible_with,
+        visibility = [":{}".format(name)],
+    )
+
+    snowydeer_import(
+        name = name,
+        artifact = ":{}".format(artifact_name),
+        compatible_with = compatible_with,
+        default_target_platform = default_target_platform,
+        exec_compatible_with = exec_compatible_with,
+        nix_deps = "deps(:{})".format(artifact_name),
+        target_compatible_with = target_compatible_with,
+        **kwargs
+    )

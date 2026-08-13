@@ -6,10 +6,13 @@
 let
   lockFile = builtins.fromJSON (builtins.readFile ./nix/flake.lock);
   flake-compat-node = lockFile.nodes.${lockFile.nodes.root.inputs.flake-compat};
-  flake-compat = builtins.fetchTarball {
-    url = "https://github.com/${flake-compat-node.locked.owner}/${flake-compat-node.locked.repo}/archive/${flake-compat-node.locked.rev}.tar.gz";
-    sha256 = flake-compat-node.locked.narHash;
-  };
+  # `fetchTree`, not `fetchTarball`: only the former consults substituters, via
+  # `Input::fetch`
+  # (https://git.lix.systems/lix-project/lix/src/e29263b638d86378b78f10a246f05ee743b117b2/lix/libfetchers/fetchers.cc#L127).
+  #
+  # `fetchTarball` checks the local store and otherwise goes
+  # straight to GitHub's unreliable archive service.
+  flake-compat = builtins.fetchTree flake-compat-node.locked;
 
   flake = (
     import flake-compat {

@@ -22,6 +22,7 @@ command_alias(
         # @moss-disable[end= ]: "--import-ca-exe=$(exe //snowydeer/import-ca)",
     ],
     exe = ":build_store_path_unwrapped",
+    visibility = ["PUBLIC"],
 )
 
 transition(

@@ -68,8 +68,9 @@ import Control.Monad
 import Control.Monad.IO.Class
 import GHC.IO qualified
 import GHC.Stack (HasCallStack, withFrozenCallStack)
-import OpenTelemetry.Context.ThreadLocal (attachContext, getContext)
-import UnliftIO (MonadUnliftIO, withRunInIO)
+import OpenTelemetry.Context (Context)
+import OpenTelemetry.Context.ThreadLocal (attachContext, detachContext, getContext)
+import UnliftIO (MonadUnliftIO, bracket, withRunInIO)
 import UnliftIO.Async qualified as UnliftIO
 import UnliftIO.Concurrent
   ( ThreadId,
@@ -91,16 +92,30 @@ unsafeUnmask action =
   withRunInIO \runInIO ->
     GHC.IO.unsafeUnmask (runInIO action)
 
+-- | Attach the given 'Context' to the thread-local for the duration of
+-- @action@; restore the original context upon completion, if any existed.
+withAttachedContext :: MonadUnliftIO m => Context -> m a -> m a
+withAttachedContext ctx action =
+  bracket
+    (attachContext ctx)
+    (detachContext)
+    \_ -> action
+{-# INLINE withAttachedContext #-}
+
 concurrently :: (MonadUnliftIO m) => m a -> m b -> m (a, b)
 concurrently ma mb = do
   ctx <- getContext
-  ClassyPreludeFull.concurrently (attachContext ctx >> ma) (attachContext ctx >> mb)
+  ClassyPreludeFull.concurrently
+    (withAttachedContext ctx ma)
+    (withAttachedContext ctx mb)
 
 concurrently_ :: (MonadUnliftIO m) => m a -> m b -> m ()
 concurrently_ ma mb = void $ concurrently ma mb
 
 forConcurrently :: (MonadUnliftIO m, Traversable t) => t a -> (a -> m b) -> m (t b)
-forConcurrently xs fn = getContext >>= \ctx -> ClassyPreludeFull.forConcurrently xs (\x -> attachContext ctx >> fn x)
+forConcurrently xs fn =
+  getContext >>= \ctx ->
+    ClassyPreludeFull.forConcurrently xs (\x -> withAttachedContext ctx $ fn x)
 
 forConcurrently_ :: (MonadUnliftIO m, Traversable t) => t a -> (a -> m b) -> m ()
 forConcurrently_ xs = void . forConcurrently xs
@@ -111,92 +126,99 @@ forConcurrently_ xs = void . forConcurrently xs
 race :: MonadUnliftIO m => m a -> m b -> m (Either a b)
 race ma mb = do
   ctx <- getContext
-  ClassyPreludeFull.race (attachContext ctx >> unsafeUnmask ma) (attachContext ctx >> unsafeUnmask mb)
+  ClassyPreludeFull.race
+    (withAttachedContext ctx $ unsafeUnmask ma)
+    (withAttachedContext ctx $ unsafeUnmask mb)
 
 race_ :: MonadUnliftIO m => m a -> m b -> m ()
 race_ ma mb = void $ race ma mb
 
 mapConcurrently :: MonadUnliftIO m => Traversable t => (a -> m b) -> t a -> m (t b)
-mapConcurrently fn xs = getContext >>= \ctx -> ClassyPreludeFull.mapConcurrently (\x -> attachContext ctx >> fn x) xs
+mapConcurrently fn xs =
+  getContext >>= \ctx ->
+    ClassyPreludeFull.mapConcurrently (\x -> withAttachedContext ctx $ fn x) xs
 
 pooledMapConcurrently_ :: MonadUnliftIO m => Foldable t => (a -> m b) -> t a -> m ()
 pooledMapConcurrently_ fn xs = do
   ctx <- getContext
-  UnliftIO.pooledMapConcurrently_ (\x -> attachContext ctx >> fn x) xs
+  UnliftIO.pooledMapConcurrently_ (\x -> withAttachedContext ctx $ fn x) xs
 
 mapConcurrently_ :: MonadUnliftIO m => Traversable t => (a -> m b) -> t a -> m ()
 mapConcurrently_ fn = void . mapConcurrently fn
 
 replicateConcurrently :: MonadUnliftIO m => Int -> m b -> m [b]
-replicateConcurrently n m = getContext >>= \ctx -> ClassyPreludeFull.replicateConcurrently n (attachContext ctx >> m)
+replicateConcurrently n m =
+  getContext >>= \ctx ->
+    ClassyPreludeFull.replicateConcurrently n (withAttachedContext ctx m)
 
 replicateConcurrently_ :: (MonadUnliftIO m) => Int -> m a -> m ()
 replicateConcurrently_ n action = do
   ctx <- getContext
-  UnliftIO.replicateConcurrently_ n do
-    attachContext ctx >> void action
+  UnliftIO.replicateConcurrently_ n $
+    withAttachedContext ctx $
+      void action
 
 pooledReplicateConcurrently :: (MonadUnliftIO m) => Int -> m b -> m [b]
 pooledReplicateConcurrently n action = do
   ctx <- getContext
-  UnliftIO.replicateConcurrently n do
-    attachContext ctx >> action
+  UnliftIO.pooledReplicateConcurrently n $
+    withAttachedContext ctx action
 
 pooledReplicateConcurrentlyN :: (MonadUnliftIO m) => Int -> Int -> m b -> m [b]
 pooledReplicateConcurrentlyN i n action = do
   ctx <- getContext
-  UnliftIO.pooledReplicateConcurrentlyN i n do
-    attachContext ctx >> action
+  UnliftIO.pooledReplicateConcurrentlyN i n $
+    withAttachedContext ctx action
 
 pooledReplicateConcurrentlyN_ :: (MonadUnliftIO m) => Int -> Int -> m b -> m ()
 pooledReplicateConcurrentlyN_ i n action = do
   ctx <- getContext
-  UnliftIO.pooledReplicateConcurrentlyN_ i n do
-    attachContext ctx >> action
+  UnliftIO.pooledReplicateConcurrentlyN_ i n $
+    withAttachedContext ctx action
 
 pooledReplicateConcurrently_ :: (MonadUnliftIO m) => Int -> m b -> m ()
 pooledReplicateConcurrently_ n action = do
   ctx <- getContext
-  UnliftIO.replicateConcurrently_ n do
-    attachContext ctx >> void action
+  UnliftIO.pooledReplicateConcurrently_ n do
+    withAttachedContext ctx $ void action
 
 pooledMapConcurrently :: (MonadUnliftIO m, Traversable t) => (a -> m b) -> t a -> m (t b)
-pooledMapConcurrently a xs = getContext >>= \ctx -> ClassyPreludeFull.pooledMapConcurrently (\x -> void (attachContext ctx) *> a x) xs
+pooledMapConcurrently a xs = getContext >>= \ctx -> ClassyPreludeFull.pooledMapConcurrently (\x -> withAttachedContext ctx (a x)) xs
 
 pooledMapConcurrentlyN :: (MonadUnliftIO m, Traversable t) => Int -> (a -> m b) -> t a -> m (t b)
 pooledMapConcurrentlyN i action xs = do
   ctx <- getContext
-  UnliftIO.pooledMapConcurrentlyN i (\x -> attachContext ctx >> action x) xs
+  UnliftIO.pooledMapConcurrentlyN i (\x -> withAttachedContext ctx $ action x) xs
 
 pooledMapConcurrentlyN_ :: (MonadUnliftIO m, Traversable t) => Int -> (a -> m b) -> t a -> m ()
 pooledMapConcurrentlyN_ i action xs = do
   ctx <- getContext
-  UnliftIO.pooledMapConcurrentlyN_ i (\x -> attachContext ctx >> action x) xs
+  UnliftIO.pooledMapConcurrentlyN_ i (\x -> withAttachedContext ctx $ action x) xs
 
 pooledForConcurrently :: (MonadUnliftIO m, Traversable t) => t a -> (a -> m b) -> m (t b)
 pooledForConcurrently xs action = do
   ctx <- getContext
-  UnliftIO.pooledForConcurrently xs \x -> attachContext ctx >> action x
+  UnliftIO.pooledForConcurrently xs \x -> withAttachedContext ctx $ action x
 
 pooledForConcurrently_ :: (MonadUnliftIO m, Traversable t) => t a -> (a -> m b) -> m ()
 pooledForConcurrently_ xs action = do
   ctx <- getContext
-  UnliftIO.pooledForConcurrently_ xs \x -> attachContext ctx >> action x
+  UnliftIO.pooledForConcurrently_ xs \x -> withAttachedContext ctx $ action x
 
 pooledForConcurrentlyN :: (MonadUnliftIO m, Traversable t) => Int -> t a -> (a -> m b) -> m (t b)
 pooledForConcurrentlyN i xs action = do
   ctx <- getContext
-  UnliftIO.pooledForConcurrentlyN i xs \x -> attachContext ctx >> action x
+  UnliftIO.pooledForConcurrentlyN i xs \x -> withAttachedContext ctx $ action x
 
 pooledForConcurrentlyN_ :: (MonadUnliftIO m, Traversable t) => Int -> t a -> (a -> m b) -> m ()
 pooledForConcurrentlyN_ i xs action = do
   ctx <- getContext
-  UnliftIO.pooledForConcurrentlyN_ i xs \x -> attachContext ctx >> action x
+  UnliftIO.pooledForConcurrentlyN_ i xs \x -> withAttachedContext ctx $ action x
 
 -- | A variant of 'UnliftIO.wait' that annotates the thrown exception with
 -- a 'CallStack'.
 wait :: (MonadCatch m, MonadIO m, HasCallStack) => Async a -> m a
-wait a = withFrozenCallStack checkpointCallStack (UnliftIO.wait a)
+wait a = withFrozenCallStack checkpointCallStack $ UnliftIO.wait a
 
 -- | Like 'UnliftIO.withAsync', but attaches the current thread
 -- context.
@@ -219,7 +241,7 @@ withAsyncWithUnmask ::
 withAsyncWithUnmask create action = do
   cxt <- getContext
   UnliftIO.withAsyncWithUnmask
-    (\unmask -> attachContext cxt >> create unmask)
+    (\unmask -> withAttachedContext cxt $ create unmask)
     action
 
 -- | Like 'UnliftIO.async', but attaches the current thread context. Prefer
@@ -264,7 +286,7 @@ asyncInheritMaskingState create = asyncWithUnmask (const create)
 asyncWithUnmask :: MonadUnliftIO m => ((forall x. m x -> m x) -> m a) -> m (Async a)
 asyncWithUnmask create = do
   currentThreadContext <- getContext
-  UnliftIO.asyncWithUnmask \unmask -> attachContext currentThreadContext >> create unmask
+  UnliftIO.asyncWithUnmask \unmask -> withAttachedContext currentThreadContext $ create unmask
 
 -- | A replacement for "UnliftIO.Concurrent" 'UnliftIO.Concurrent.forkFinally'
 -- which preserves the opentelemetry span.
@@ -276,17 +298,15 @@ forkFinally ::
 forkFinally action handler = do
   currentThreadContext <- getContext
   UnliftIO.Concurrent.forkFinally
-    (attachContext currentThreadContext >> action)
-    (\a -> attachContext currentThreadContext >> handler a)
+    (withAttachedContext currentThreadContext action)
+    (\a -> withAttachedContext currentThreadContext $ handler a)
 
 -- | A replacement for "UnliftIO.Concurrent" 'UnliftIO.Concurrent.forkIO' which
 -- preserves the open telemetry span.
 forkIO :: (MonadUnliftIO m) => m () -> m ThreadId
 forkIO action = do
   context <- getContext
-  UnliftIO.Concurrent.forkIO do
-    _ <- attachContext context
-    action
+  UnliftIO.Concurrent.forkIO $ withAttachedContext context action
 
 -- | A copy of "UnliftIO.Async" 'UnliftIO.Async.Concurrently' which
 -- properly preserves the open telemetry context.

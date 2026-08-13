@@ -39,6 +39,7 @@ mercury_haskell_binary(
     name = "hello",
     srcs = ["Hello.hs"],
     main = "Hello",
+    visibility = ["//snowydeer/container/test/..."],
     deps = [
         "//haskell:base",
     ],
@@ -49,6 +50,12 @@ snowydeer_package(
     binaries = [
         ":hello",
     ],
+)
+
+sh_test(
+    name = "hello_pkg_test",
+    args = ["$(location :hello_pkg[store_path])"],
+    test = "hello_pkg_test.sh",
 )
 
 # This is a wrapper for
@@ -88,4 +95,5 @@ snowydeer_container(
 
     # Optional. Expose TCP port 2003.
     ports = ["2003/tcp"],
+    visibility = ["//snowydeer/container/test/..."],
 )

@@ -4,6 +4,14 @@
 
 load("//haskell:haskell_spec.bzl", "local_packages_spec")
 
+# The container shells out to `nix build -f`, which is non-flake and so doesn't
+# pick up the flake's `nixConfig`. Hand it the substituters explicitly, or the
+# e2e test rebuilds the world instead of hitting cache.
+_nix_config = "\n".join([
+    "extra-substituters = " + read_root_config("nix", "extra_substituters", ""),
+    "extra-trusted-public-keys = " + read_root_config("nix", "extra_trusted_public_keys", ""),
+])
+
 local_packages_spec(
     name = "application_spec",
     srcs = ["ApplicationSpec.hs"],
@@ -36,5 +44,33 @@ local_packages_spec(
         "//haskell:rio",
         "//haskell:shakespeare",
         "//snowydeer/container/src/Snowydeer/Container",
+    ],
+)
+
+local_packages_spec(
+    name = "container_e2e_spec",
+    srcs = ["E2ESpec.hs"],
+    env = {
+        # just here to invalidate the test execution if the hello changes. this
+        # is gross!
+        "HELLO_BIN": "$(location //snowydeer/demo:hello)",
+        "HELLO_CONTAINER": "$(exe //snowydeer/demo:hello_container)",
+        "NIX_CONFIG": _nix_config,
+        "PODMAN_BIN": "$(exe toolchains//:podman)",
+    },
+    # Builds a container with Nix and runs it under podman.
+    labels = ["large"],
+    main = "Snowydeer.Container.E2ESpec",
+    target_compatible_with = ["prelude//os:linux"],
+    deps = [
+        "//haskell:aeson",
+        "//haskell:base",
+        "//haskell:bytestring",
+        "//haskell:containers",
+        "//haskell:hspec",
+        "//haskell:rio",
+        "//haskell:text",
+        "//haskell:unordered-containers",
+        "//snowydeer/container/src/Snowydeer/Container/E2E",
     ],
 )
