@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+python_library(
+    name = "telemetry",
+    srcs = glob(["*.py"]),
+    base_module = "mercury_ci.telemetry",
+    typing = True,
+    visibility = ["PUBLIC"],
+    deps = [
+        "//third_party/mercury_ci:env",
+        "//third_party/python:opentelemetry-api",
+        "//third_party/python:opentelemetry-exporter-otlp-proto-http",
+        "//third_party/python:opentelemetry-sdk",
+        "//third_party/python:opentelemetry-semantic-conventions",
+    ],
+)

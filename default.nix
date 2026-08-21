@@ -18,6 +18,8 @@ let
     import flake-compat {
       src = ./nix;
       copySourceTreeToStore = false;
+      # builtins.fetchTree checks binary caches for a copy of the path before hitting github, which helps when github is having another outage
+      useBuiltinsFetchTree = true;
     }
   );
 

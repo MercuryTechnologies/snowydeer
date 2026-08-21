@@ -8,8 +8,18 @@ pytest(
     name = "tests",
     srcs = glob(["*.py"]),
     base_module = "mercury_ci.tests",
+    env = {
+        "OTEL_SDK_DISABLED": "false",
+        "OTEL_TRACES_EXPORTER": "none",
+    },
     deps = [
+        "//third_party/mercury_ci:env",
+        "//third_party/mercury_ci/telemetry",
         "//third_party/mercury_ci/testing",
+        "//third_party/mercury_ci/testing:strip_ansi",
+        "//third_party/python:expecttest",
         "//third_party/python:hypothesis",
+        "//third_party/python:opentelemetry-sdk",
+        "//third_party/python:opentelemetry-semantic-conventions",
     ],
 )

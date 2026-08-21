@@ -9,23 +9,43 @@ from collections.abc import Callable
 import pytest
 from hypothesis import given
 
-from mercury_ci.actions import Buck2, BuckOpts, TestFilters
+from mercury_ci.actions import Buck2, BuckOpts, TestFilters, is_full_mercury_repo
 from mercury_ci.testing import RecordingCiActions
 from mercury_ci.testing.strategies import buck_opts, test_filters
 
 FROM_SOURCE = BuckOpts(argfiles=["constraints/bootstrap_mode/from_source.args"])
 
 
+def test_buck2_forwards_working_directory() -> None:
+    actions = RecordingCiActions()
+    Buck2(actions).build(["//a"], cwd="/checkout")
+    assert [inv.cwd for inv in actions.buck2_invocations] == ["/checkout"]
+
+
+def test_cquery_forwards_working_directory() -> None:
+    actions = RecordingCiActions(buck2_handler=lambda _: b"[]")
+    Buck2(actions).cquery("//...", cwd="/checkout")
+    assert actions.buck2_invocations[0].cwd == "/checkout"
+
+
+def test_is_full_mercury_repo_forwards_working_directory() -> None:
+    actions = RecordingCiActions(
+        buck2_handler=lambda _: b'{"mercury.is_full_mercury_repo":"true"}'
+    )
+    assert is_full_mercury_repo(actions, cwd="/checkout")
+    assert actions.buck2_invocations[0].cwd == "/checkout"
+
+
 def test_build_without_opts_is_backward_compatible() -> None:
     actions = RecordingCiActions()
     Buck2(actions).build(["//a", "//b"])
-    assert actions.buck2_calls == [["build", "--", "//a", "//b"]]
+    assert actions.buck2_invocation_args == [["build", "--", "//a", "//b"]]
 
 
 def test_run_without_opts_is_backward_compatible() -> None:
     actions = RecordingCiActions()
     Buck2(actions).run("//a", ["x", "y"])
-    assert actions.buck2_calls == [["run", "//a", "--", "x", "y"]]
+    assert actions.buck2_invocation_args == [["run", "//a", "--", "x", "y"]]
 
 
 def test_test_without_test_args_omits_the_separator() -> None:
@@ -33,7 +53,7 @@ def test_test_without_test_args_omits_the_separator() -> None:
     # is not harmless.
     actions = RecordingCiActions()
     Buck2(actions).test(["//a", "//b"])
-    assert actions.buck2_calls == [["test", "//a", "//b"]]
+    assert actions.buck2_invocation_args == [["test", "//a", "//b"]]
 
 
 def test_test_serializes_filters_then_targets_then_test_args() -> None:
@@ -43,7 +63,7 @@ def test_test_serializes_filters_then_targets_then_test_args() -> None:
         test_args=["--verbose"],
         filters=TestFilters(exclude=["hlint"], always_exclude=True),
     )
-    assert actions.buck2_calls == [
+    assert actions.buck2_invocation_args == [
         ["test", "--exclude", "hlint", "--always-exclude", "//a", "--", "--verbose"]
     ]
 
@@ -51,7 +71,7 @@ def test_test_serializes_filters_then_targets_then_test_args() -> None:
 def test_build_serializes_modifiers() -> None:
     actions = RecordingCiActions()
     Buck2(actions).build(["//a"], opts=BuckOpts(modifiers=["release", "static"]))
-    assert actions.buck2_calls == [
+    assert actions.buck2_invocation_args == [
         ["build", "-m", "release", "-m", "static", "--", "//a"]
     ]
 
@@ -59,7 +79,9 @@ def test_build_serializes_modifiers() -> None:
 def test_run_serializes_opts_before_target() -> None:
     actions = RecordingCiActions()
     Buck2(actions).run("//a", ["--upload"], opts=BuckOpts(modifiers=["release"]))
-    assert actions.buck2_calls == [["run", "-m", "release", "//a", "--", "--upload"]]
+    assert actions.buck2_invocation_args == [
+        ["run", "-m", "release", "//a", "--", "--upload"]
+    ]
 
 
 def test_argfiles_precede_the_flags_that_override_them() -> None:
@@ -67,7 +89,7 @@ def test_argfiles_precede_the_flags_that_override_them() -> None:
     Buck2(actions).build(
         ["//a"], opts=FROM_SOURCE | BuckOpts(configs={"mercury.thing": "1"})
     )
-    assert actions.buck2_calls == [
+    assert actions.buck2_invocation_args == [
         [
             "build",
             "@constraints/bootstrap_mode/from_source.args",
@@ -85,7 +107,7 @@ def test_bound_opts_apply_to_every_command() -> None:
     buck2.build(["//a"])
     buck2.run("//a")
     modefile = "@constraints/bootstrap_mode/from_source.args"
-    assert actions.buck2_calls == [
+    assert actions.buck2_invocation_args == [
         ["build", modefile, "--", "//a"],
         ["run", modefile, "//a", "--"],
     ]
@@ -96,13 +118,13 @@ def test_with_opts_does_not_affect_the_original() -> None:
     buck2 = Buck2(actions)
     buck2.with_opts(FROM_SOURCE)
     buck2.build(["//a"])
-    assert actions.buck2_calls == [["build", "--", "//a"]]
+    assert actions.buck2_invocation_args == [["build", "--", "//a"]]
 
 
 def test_uquery_requests_json_with_attributes() -> None:
     actions = RecordingCiActions(buck2_handler=lambda _: b"{}")
     Buck2(actions).uquery("kind(x, //...)", ["compatible_with", "labels"])
-    assert actions.buck2_calls == [
+    assert actions.buck2_invocation_args == [
         [
             "uquery",
             "--json",
@@ -115,11 +137,20 @@ def test_uquery_requests_json_with_attributes() -> None:
     ]
 
 
+def test_utargets_requests_json_with_attributes() -> None:
+    actions = RecordingCiActions(buck2_handler=lambda _: b'[{"labels": ["fast"]}]')
+    result = Buck2(actions).utargets(["//..."], ["^labels$"])
+    assert actions.buck2_invocation_args == [
+        ["utargets", "--json", "//...", "--output-attribute", "^labels$"]
+    ]
+    assert result == [{"labels": ["fast"]}]
+
+
 def test_uquery_requests_json_without_attributes() -> None:
     # --json must be present so a bare query yields parseable JSON, not text.
     actions = RecordingCiActions(buck2_handler=lambda _: b'["//a", "//b"]')
     result = Buck2(actions).uquery("q")
-    assert actions.buck2_calls == [["uquery", "--json", "q"]]
+    assert actions.buck2_invocation_args == [["uquery", "--json", "q"]]
     assert result == ["//a", "//b"]
 
 
@@ -203,7 +234,7 @@ def argv_of(invoke: Callable[[Buck2], object]) -> list[str]:
     """The single buck2 command line that `invoke` produces."""
     actions = RecordingCiActions(buck2_handler=lambda _: b"{}")
     invoke(Buck2(actions))
-    (call,) = actions.buck2_calls
+    (call,) = actions.buck2_invocation_args
     return call
 
 
@@ -264,7 +295,7 @@ def test_the_three_ways_to_supply_options_agree(
 def test_get_config_considers_modefiles() -> None:
     actions = RecordingCiActions(buck2_handler=lambda _: b"{}")
     Buck2(actions).with_opts(FROM_SOURCE).get_config()
-    assert actions.buck2_calls == [
+    assert actions.buck2_invocation_args == [
         [
             "audit",
             "config",
@@ -277,4 +308,6 @@ def test_get_config_considers_modefiles() -> None:
 def test_program_args_that_look_like_buck2_flags_are_not_intercepted() -> None:
     actions = RecordingCiActions()
     Buck2(actions).run("//a", ["-m", "not-a-modifier"])
-    assert actions.buck2_calls == [["run", "//a", "--", "-m", "not-a-modifier"]]
+    assert actions.buck2_invocation_args == [
+        ["run", "//a", "--", "-m", "not-a-modifier"]
+    ]

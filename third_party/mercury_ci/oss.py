@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
-from mercury_ci.actions import Buck2, CiActions, is_full_mercury_repo
+from mercury_ci.actions import AbstractCiActions, Buck2, is_full_mercury_repo
 from enum import Enum
 
 
@@ -81,7 +81,10 @@ ENV_ALLOWLIST = {
 
 
 def reexec_copybara(
-    ci: CiActions, copybara_target: str, ci_run_target: str, args: list[str] = []
+    ci: AbstractCiActions,
+    copybara_target: str,
+    ci_run_target: str,
+    args: list[str] = [],
 ):
     """
     Re-executes a CI workflow from within a copybara export. This allows
@@ -175,7 +178,7 @@ def add_nix_config(adds: dict[str, str], existing: str) -> str:
     return "\n".join(new_lines)
 
 
-def setup_nix_config(ci: CiActions):
+def setup_nix_config(ci: AbstractCiActions):
     # XXX(jadel): this is all quite nasty and primarily only actually necessary if
     # you're using it locally, since most of this is configured on the CI runners
     # globally.

@@ -5,7 +5,7 @@
 load("@prelude//tests:test_toolchain.bzl", "noop_test_toolchain")
 load("@prelude//toolchains:remote_test_execution.bzl", "remote_test_execution_toolchain")
 load("@toolchains//nix:default_toolchains.bzl", "default_flake_attrs", "default_nix_toolchains", "exec_compatible_with")
-load("@toolchains//nix:nix_build.bzl", "nix_build")
+load("@toolchains//nix:nix_build.bzl", "nix_build", "nix_realise_worker")
 load("@toolchains//nix:nix_haskell_toolchain.bzl", "nix_haskell_toolchain")
 load("@toolchains//nix:nix_upload.bzl", "flake_nix_paths")
 
@@ -52,9 +52,9 @@ nix_haskell_toolchain(
     visibility = ["PUBLIC"],
 )
 
-alias(
+nix_realise_worker(
     name = "nix_realiser_worker",
-    actual = "toolchains//tools:nix_realiser_worker",
+    exe = "toolchains//tools:nix_realiser_worker",
     visibility = ["PUBLIC"],
 )
 
@@ -69,8 +69,23 @@ nix_build(
 )
 
 nix_build(
+    name = "buck2",
+    attr = "buck2-source",
+    binary = "buck2",
+    flake = "@nix//:nix_overlays",
+    visibility = ["PUBLIC"],
+)
+
+nix_build(
     name = "hspec-discover",
     binary = "hspec-discover",
+    flake = "@nix//:nix_overlays",
+    visibility = ["PUBLIC"],
+)
+
+nix_build(
+    name = "git",
+    binary = "git",
     flake = "@nix//:nix_overlays",
     visibility = ["PUBLIC"],
 )
@@ -127,8 +142,11 @@ flake_nix_paths(
     name = "all_nix_flakes",
     flakes = [
         "toolchains//:bash",
+        "toolchains//:btd",
+        "toolchains//:buck2",
         "toolchains//:cache-hook",
         "toolchains//:ghc",
+        "toolchains//:git",
         "toolchains//:hspec-discover",
         "toolchains//:nix_cxx",
         "toolchains//:nix_rust",

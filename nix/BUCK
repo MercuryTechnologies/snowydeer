@@ -9,6 +9,10 @@ filegroup(
         "**/*.nix",
         "**/*.sh",
         "**/*.patch",
+        "packages/buck2-source/Cargo.lock",
+        "packages/buck2-source/Cargo.lock.next",
+        "packages/buck2-source/versions.json",
+        "packages/buck2-change-detector/Cargo.lock",
     ]),
     visibility = ["PUBLIC"],
 )

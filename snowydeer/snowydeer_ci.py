@@ -6,9 +6,12 @@
 Verifies that a snowydeer build works correctly.
 """
 
-import subprocess
-import sys
-from mercury_ci.actions import Buck2, CiActions, is_full_mercury_repo
+from mercury_ci.actions import (
+    AbstractCiActions,
+    Buck2,
+    ci_actions,
+    is_full_mercury_repo,
+)
 from mercury_ci.oss import (
     UploadMode,
     cache_toolchain,
@@ -23,7 +26,7 @@ def default_oss_ci(upload_mode: UploadMode, buck2: Buck2):
     buck2.test(["//..."])
 
 
-def go(upload_mode: UploadMode, ci: CiActions):
+def go(upload_mode: UploadMode, ci: AbstractCiActions):
     buck2 = Buck2(ci)
 
     if not is_full_mercury_repo(ci):
@@ -55,8 +58,7 @@ def main():
     upload_mode: UploadMode = UploadMode.from_arg(args.upload_mode)
     copybara: bool = args.copybara
 
-    try:
-        ci = CiActions()
+    with ci_actions() as ci:
         if copybara:
             reexec_copybara(
                 ci,
@@ -67,11 +69,6 @@ def main():
         else:
             setup_nix_config(ci)
             go(upload_mode, ci)
-    except subprocess.CalledProcessError as e:
-        print(e, file=sys.stderr)
-        print("stdout:\n", (e.stdout or b"").decode(), sep="", file=sys.stderr)
-        print("stderr:\n", (e.stderr or b"").decode(), sep="", file=sys.stderr)
-        sys.exit(e.returncode)
 
 
 if __name__ == "__main__":

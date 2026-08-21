@@ -2,25 +2,49 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
+"""CI actions with managed subprocesses, telemetry, and testable side effects."""
+
 import dataclasses
+import contextlib
 import subprocess
 import pathlib
 import sys
 import functools
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import os
 import shlex
 import itertools
 import typing
+from opentelemetry.trace import TracerProvider
+
 from . import github
+from .telemetry import _Telemetry, _run_subprocess
 
 
 ANSI_CYAN = "\033[96m"
 ANSI_RESET = "\033[0m"
 
 StrOrPath = os.PathLike[str] | str
+SpanAttributeScalar = str | bool | int | float
+SpanAttributeValue = SpanAttributeScalar | Sequence[SpanAttributeScalar]
+
+
+def _validated_span_attribute(attr: str, value: object) -> SpanAttributeValue:
+    """Validate and normalize one OpenTelemetry-compatible span attribute."""
+    scalar_types = (str, bool, int, float)
+    if type(value) in scalar_types:
+        return typing.cast(SpanAttributeScalar, value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        items = list(value)
+        item_types = {type(item) for item in items}
+        if item_types.issubset(scalar_types) and len(item_types) <= 1:
+            return typing.cast(list[SpanAttributeScalar], items)
+    raise TypeError(
+        f"root span attribute {attr!r} must be a scalar or homogeneous sequence "
+        f"of str, bool, int, or float; got {value!r}"
+    )
 
 
 @dataclass(frozen=True)
@@ -95,6 +119,8 @@ class AbstractCiActions:
     allowing for easy mocking in case we write tests for these in the future.
     """
 
+    root_span_attrs: dict[str, SpanAttributeValue]
+
     def log(self, message: str):
         """
         Print a message to stderr.
@@ -107,12 +133,10 @@ class AbstractCiActions:
         capture_output: bool = False,
         capture_err: bool = False,
         check: bool = True,
+        cwd: StrOrPath | None = None,
     ) -> CommandResult:
         """
-        Run a subprocess. The subprocess runs inside `hotel exec`, which
-        ensures that we get an otel span which includes handy attributes like
-        the process exit code
-        sent to Honeycomb.
+        Run a managed subprocess and emit its OpenTelemetry process span.
 
         kwargs:
         - capture_output:
@@ -121,13 +145,7 @@ class AbstractCiActions:
 
         - check:
              True by default; if false, allow the command to fail (i.e. exit
-             nonzero)"""
-        raise NotImplementedError
-
-    def popen_subprocess(self, args: list[str], **kwargs) -> subprocess.Popen:
-        """
-        Similar to run_subprocess but does not wait for it, instead returning the
-        Popen handle. Useful for running several commands concurrently.
+             nonzero)
         """
         raise NotImplementedError
 
@@ -138,6 +156,7 @@ class AbstractCiActions:
         capture_err: bool = False,
         check: bool = True,
         log_critical_path: bool = False,
+        cwd: StrOrPath | None = None,
     ) -> CommandResult:
         """
         Run buck2 via run_subprocess() and optionally also log the critical
@@ -172,8 +191,28 @@ class AbstractCiActions:
         """
         raise NotImplementedError
 
+    def write_github_step_summary(self, markdown: str) -> None:
+        """Append Markdown to GitHub's step summary and show it locally."""
+        raise NotImplementedError
 
-class CiActions(AbstractCiActions):
+    def set_root_span_attr(self, attr: str, value: SpanAttributeValue) -> None:
+        """Set an attribute on the CI job root span."""
+        self.set_root_span_attrs({attr: value})
+
+    def set_root_span_attrs(self, attrs: Mapping[str, SpanAttributeValue]) -> None:
+        """Set several attributes on the CI job root span."""
+        validated = {
+            attr: _validated_span_attribute(attr, value)
+            for attr, value in attrs.items()
+        }
+        self.root_span_attrs.update(validated)
+
+
+class _CiActions(AbstractCiActions):
+    def __init__(self, telemetry: _Telemetry) -> None:
+        self.root_span_attrs = {}
+        self._telemetry = telemetry
+
     def log(self, message: str):
         print(f"{ANSI_CYAN}• {message}{ANSI_RESET}", file=sys.stderr)
 
@@ -183,40 +222,26 @@ class CiActions(AbstractCiActions):
         else:
             self.log(f"$ {shlex.join(args[:50])} ...")
 
-    def _hotel_wrapped(self, args: list[str]) -> list[str]:
-        otel_attrs_args = []
-        # Add an attribute if this is happening as part of a required check.
-        # This allows us to vary our SLO across required/optional checks.
-        if os.environ.get("CI_REQUIRED_CHECK", None):
-            otel_attrs_args.append("--attribute")
-            otel_attrs_args.append("ci_required_check=true")
-
-        hotel = os.environ.get("HOTEL")
-        if not hotel:
-            raise ValueError(
-                'Please set HOTEL to the hotel executable or if you really want to skip telemetry, set it to "skip"'
-            )
-        if hotel == "skip":
-            return list(args)
-        return [hotel, "exec"] + otel_attrs_args + args
-
     def run_subprocess(
-        self, args: list[str], capture_output=False, capture_err=False, check=True
+        self,
+        args: list[str],
+        capture_output=False,
+        capture_err=False,
+        check=True,
+        cwd: StrOrPath | None = None,
     ) -> CommandResult:
-        kwargs: dict = {"check": check}
-        if capture_output:
-            kwargs["stdout"] = subprocess.PIPE
-        if capture_err:
-            kwargs["stderr"] = subprocess.PIPE
-
         self._log_command(args)
-        return CommandResult.from_subprocess(
-            subprocess.run(self._hotel_wrapped(args), **kwargs)
+        result = CommandResult.from_subprocess(
+            _run_subprocess(
+                self._telemetry,
+                args,
+                capture_output=capture_output,
+                capture_err=capture_err,
+                check=check,
+                cwd=cwd,
+            )
         )
-
-    def popen_subprocess(self, args: list[str], **kwargs) -> subprocess.Popen:
-        self._log_command(args)
-        return subprocess.Popen(self._hotel_wrapped(args), **kwargs)
+        return result.ok() if check else result
 
     @property
     def buck2(self) -> "Buck2":
@@ -232,6 +257,7 @@ class CiActions(AbstractCiActions):
         capture_err=False,
         check=True,
         log_critical_path=False,
+        cwd: StrOrPath | None = None,
     ) -> CommandResult:
         try:
             return self.run_subprocess(
@@ -239,12 +265,15 @@ class CiActions(AbstractCiActions):
                 capture_output=capture_output,
                 capture_err=capture_err,
                 check=check,
+                cwd=cwd,
             )
         finally:
             if log_critical_path:
                 print("::group::buck2 log critical-path", file=sys.stderr)
                 critical_path_output = self.run_subprocess(
-                    ["buck2", "log", "critical-path"], capture_output=True
+                    ["buck2", "log", "critical-path"],
+                    capture_output=True,
+                    cwd=cwd,
                 )
                 print(critical_path_output.stdout_s, file=sys.stderr)
                 print("::endgroup::", file=sys.stderr)
@@ -277,6 +306,94 @@ class CiActions(AbstractCiActions):
         self.log(f"Set GITHUB_OUTPUT:\n  {name}={value}")
         if "GITHUB_OUTPUT" in os.environ:
             github.write_output(name, value)
+
+    def write_github_step_summary(self, markdown: str) -> None:
+        content = markdown.rstrip("\n") + "\n"
+        self.log(f"GITHUB_STEP_SUMMARY:\n{content}")
+        if output := os.environ.get("GITHUB_STEP_SUMMARY"):
+            with pathlib.Path(output).open("a", encoding="utf-8") as handle:
+                handle.write(content)
+
+
+@contextlib.contextmanager
+def ci_actions(
+    *,
+    exit_on_child_failure: bool = True,
+    tracer_provider: TracerProvider | None = None,
+) -> typing.Iterator[AbstractCiActions]:
+    """Acquire CI actions with root-span and child-failure lifecycle handling."""
+    root_span_name = (
+        os.environ.get("MERCURY_CI_TARGET") or pathlib.Path(sys.argv[0]).name
+    )
+    telemetry = _Telemetry(
+        env=os.environ,
+        root_span_name=root_span_name,
+        tracer_provider=tracer_provider,
+    )
+    actions = _CiActions(telemetry)
+    root_error: BaseException | None = None
+    exit_code = 0
+    try:
+        with telemetry.activate_root_span():
+            try:
+                yield actions
+            except subprocess.CalledProcessError as error:
+                root_error = error
+                exit_code = error.returncode
+                if not exit_on_child_failure:
+                    raise
+                print(error, file=sys.stderr)
+                if error.stdout:
+                    print(
+                        "stdout:\n",
+                        _process_output(error.stdout),
+                        sep="",
+                        file=sys.stderr,
+                    )
+                if error.stderr:
+                    print(
+                        "stderr:\n",
+                        _process_output(error.stderr),
+                        sep="",
+                        file=sys.stderr,
+                    )
+                raise SystemExit(error.returncode) from error
+            except BaseException as error:
+                root_error = error
+                exit_code = _exception_exit_code(error)
+                raise
+            finally:
+                telemetry.set_root_span_result(
+                    attributes=actions.root_span_attrs,
+                    exit_code=exit_code,
+                    error=root_error,
+                )
+                if not telemetry.has_provider:
+                    actions.log(
+                        json.dumps(
+                            {"root_span_attributes": actions.root_span_attrs},
+                            sort_keys=True,
+                        )
+                    )
+    finally:
+        telemetry.shutdown()
+
+
+def _process_output(output: bytes | str) -> str:
+    """Decode captured child output for a CI failure report."""
+    return output.decode(errors="replace") if isinstance(output, bytes) else output
+
+
+def _exception_exit_code(error: BaseException) -> int:
+    if isinstance(error, KeyboardInterrupt):
+        return 130
+    if not isinstance(error, SystemExit):
+        return 1
+    if error.code is None:
+        return 0
+    if isinstance(error.code, int):
+        return error.code
+    return 1
 
 
 class Flags(typing.Protocol):
@@ -447,7 +564,11 @@ class Buck2:
             *itertools.chain.from_iterable(group.to_args() for group in groups),
         ]
 
-    def get_config(self, opts: BuckOpts = BuckOpts()) -> dict[str, str]:
+    def get_config(
+        self,
+        opts: BuckOpts = BuckOpts(),
+        cwd: StrOrPath | None = None,
+    ) -> dict[str, str]:
         """
         Gets the buckconfig as a map. This takes into account modefiles and
         similar added by BuckOpts.
@@ -457,6 +578,7 @@ class Buck2:
             self.actions.run_buck2(
                 [*self._prefix(["audit", "config"], self.opts | opts), "--json"],
                 capture_output=True,
+                cwd=cwd,
             ).stdout
         )
 
@@ -512,6 +634,7 @@ class Buck2:
         query: str,
         output_attributes: Sequence[str] = (),
         opts: BuckOpts = BuckOpts(),
+        cwd: StrOrPath | None = None,
     ) -> typing.Any:
         """
         buck2 *query [opts...] --json $query [--output-attribute attr...],
@@ -524,7 +647,7 @@ class Buck2:
         args = [*self._prefix([query_type], self.opts | opts), "--json", query]
         for attr in output_attributes:
             args += ["--output-attribute", attr]
-        stdout = self.actions.run_buck2(args, capture_output=True).stdout
+        stdout = self.actions.run_buck2(args, capture_output=True, cwd=cwd).stdout
         if not stdout.strip():
             return {}
         return json.loads(stdout)
@@ -544,8 +667,28 @@ class Buck2:
     buck cquery
     """
 
+    def utargets(
+        self,
+        target_patterns: Sequence[str],
+        output_attributes: Sequence[str] = (),
+        opts: BuckOpts = BuckOpts(),
+        cwd: StrOrPath | None = None,
+    ) -> typing.Any:
+        """Run `buck2 utargets` and parse its JSON output."""
+        args = [
+            *self._prefix(["utargets"], self.opts | opts),
+            "--json",
+            *target_patterns,
+        ]
+        for attr in output_attributes:
+            args += ["--output-attribute", attr]
+        stdout = self.actions.run_buck2(args, capture_output=True, cwd=cwd).stdout
+        if not stdout.strip():
+            return {}
+        return json.loads(stdout)
+
 
 @functools.cache
-def is_full_mercury_repo(ci: CiActions) -> bool:
+def is_full_mercury_repo(ci: AbstractCiActions, cwd: StrOrPath | None = None) -> bool:
     buck2 = Buck2(ci)
-    return buck2.get_config().get("mercury.is_full_mercury_repo") == "true"
+    return buck2.get_config(cwd=cwd).get("mercury.is_full_mercury_repo") == "true"

@@ -15,6 +15,7 @@ load("@prelude//platforms:defs.bzl", "host_configuration")
 load("@toolchains//nix:nix_bash_toolchain.bzl", "nix_bash_genrule_toolchain")
 load("@toolchains//nix:nix_build.bzl", "nix_build")
 load("@toolchains//nix:nix_cxx_toolchain.bzl", "nix_cxx_toolchain")
+load("@toolchains//nix:nix_native_lib.bzl", "nix_native_lib")
 load("@toolchains//nix:nix_python_toolchain.bzl", "nix_python_bootstrap_toolchain", "nix_python_toolchain")
 load("@toolchains//nix:nix_rust_toolchain.bzl", "nix_rust_toolchain")
 
@@ -190,10 +191,36 @@ def default_flake_attrs():
     )
 
     nix_build(
+        name = "btd",
+        attr = "buck2-change-detector",
+        binaries = ["targets"],
+        binary = "btd",
+        flake = "@nix//:nix_overlays",
+        visibility = ["PUBLIC"],
+    )
+
+    nix_build(
         name = "python_bootstrap_interpreter",
         attr = "python",
         binary = "python",
         flake = "@nix//:nix_overlays",
+    )
+
+    nix_build(
+        name = "libstdcxx_nix",
+        attr = "libstdcxx",
+        flake = "@nix//:nix_overlays",
+        outputs = ["lib"],
+        target_compatible_with = ["prelude//os:linux"],
+        visibility = ["PUBLIC"],
+    )
+
+    nix_native_lib(
+        name = "libstdcxx",
+        input = ":libstdcxx_nix",
+        lib_name = "stdc++",
+        target_compatible_with = ["prelude//os:linux"],
+        visibility = ["PUBLIC"],
     )
 
     nix_build(

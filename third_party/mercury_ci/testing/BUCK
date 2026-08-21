@@ -3,13 +3,27 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 python_library(
+    name = "strip_ansi",
+    srcs = ["strip_ansi.py"],
+    base_module = "mercury_ci.testing",
+    typing = True,
+    visibility = ["PUBLIC"],
+)
+
+python_library(
     name = "testing",
-    srcs = glob(["*.py"]),
+    srcs = glob(
+        ["*.py"],
+        exclude = ["strip_ansi.py"],
+    ),
     base_module = "mercury_ci.testing",
     typing = True,
     visibility = ["PUBLIC"],
     deps = [
         "//third_party/mercury_ci",
+        "//third_party/python:expecttest",
         "//third_party/python:hypothesis",
+        "//third_party/python:opentelemetry-sdk",
+        "//third_party/python:opentelemetry-semantic-conventions",
     ],
 )

@@ -96,7 +96,7 @@ def test_git_status_command_shape_and_parse() -> None:
         Path("new"),
         Path("u"),
     ]
-    assert actions.subprocess_calls[0] == [
+    assert actions.subprocess_invocation_args[0] == [
         "git",
         "status",
         "--porcelain=v1",
@@ -115,7 +115,7 @@ def test_untracked_mode_forwarded() -> None:
         subprocess_handler=lambda args: CommandResult(0, args, b"", b"")
     )
     Git(actions).status(UntrackedMode.NO)
-    assert "--untracked-files=no" in actions.subprocess_calls[0]
+    assert "--untracked-files=no" in actions.subprocess_invocation_args[0]
 
 
 def test_plain_entry_affected_paths() -> None:

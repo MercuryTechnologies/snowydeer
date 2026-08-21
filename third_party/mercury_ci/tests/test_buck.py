@@ -7,7 +7,7 @@
 import pytest
 from hypothesis import given
 
-from mercury_ci.buck import BuckTarget
+from mercury_ci.buck import BuckPackagePattern, BuckTarget
 from mercury_ci.testing.strategies import buck_targets
 
 
@@ -27,6 +27,52 @@ def test_nested_package() -> None:
     target = BuckTarget.parse("root//tools/build/platforms:linux-x86_64")
     assert target.package == "tools/build/platforms"
     assert target.name == "linux-x86_64"
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ("root//tools/a:test", "root//tools/a:test"),
+        (
+            "root//tools/a:test (root//platforms:default#123)",
+            "root//tools/a:test",
+        ),
+        (
+            "toolchains//:cxx (cfg:<empty>#abc) (root//platforms:default#123)",
+            "toolchains//:cxx",
+        ),
+    ],
+)
+def test_parse_configured_discards_configuration(
+    configured: str, expected: str
+) -> None:
+    assert str(BuckTarget.parse_configured(configured)) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "matching", "not_matching"),
+    [
+        ("root//:", "root//:mwb", "root//src:mwb"),
+        ("root//src/...", "root//src/Foo:test", "root//source:test"),
+        ("toolchains//...", "toolchains//:btd", "root//toolchains:btd"),
+    ],
+)
+def test_package_pattern_matches_targets(
+    raw: str, matching: str, not_matching: str
+) -> None:
+    pattern = BuckPackagePattern.parse(raw)
+    assert str(pattern) == raw
+    assert pattern.matches(BuckTarget.parse(matching))
+    assert not pattern.matches(BuckTarget.parse(not_matching))
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["//src/...", "root//src", "root//src:*", "root//src/.../nested"],
+)
+def test_package_pattern_rejects_unsupported_syntax(raw: str) -> None:
+    with pytest.raises(ValueError):
+        BuckPackagePattern.parse(raw)
 
 
 @pytest.mark.parametrize("label", ["//:mwb_ghci", "root//:foo"])

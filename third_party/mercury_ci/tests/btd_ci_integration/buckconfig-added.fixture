@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[cells]
+root = .
+prelude = prelude
+added = added
+
+[buildfile]
+name = BUCK

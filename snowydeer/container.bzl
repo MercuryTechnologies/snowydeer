@@ -112,6 +112,8 @@ snowydeer_container = rule(
         "main_contents": attrs.list(attrs.dep(providers = [NixDynamicInfo]), doc = "What to promote to its own layers in the image"),
         "ports": attrs.list(attrs.string(), default = [], doc = "Ports to expose, e.g. '9000/tcp'"),
         "base_image": attrs.option(attrs.dep(providers = [SnowydeerBaseImageInfo]), default = None, doc = "Optional pinned third-party base image to build on top of"),
-        "_build_container": attrs.exec_dep(default = "//snowydeer/container"),
+        # FIXME(DUX-5633): transitioning to exec dep causes stochastic CI
+        # failure due to persistent worker bugs on different configurations.
+        "_build_container": attrs.dep(default = "//snowydeer/container"),
     } | mercury_metadata_attrs(),
 )

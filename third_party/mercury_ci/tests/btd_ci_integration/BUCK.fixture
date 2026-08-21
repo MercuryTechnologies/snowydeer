@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+stub(
+    name = "leaf",
+    srcs = ["input.txt"],
+)
+
+test(
+    name = "passing_test",
+)
+
+test(
+    name = "filtered_failing_test",
+    labels = ["btd_broken"],
+    succeeds = False,
+)
+
+stub(
+    name = "dependent",
+    deps = [":leaf"],
+)
+
+stub(
+    name = "monolith_dependent",
+    deps = ["//monolith:leaf"],
+)
+
+host_stub(
+    name = "linux-aarch64",
+    arch = "aarch64",
+    os = "linux",
+)
+
+host_stub(
+    name = "linux-x86_64",
+    arch = "x86_64",
+    os = "linux",
+)
+
+host_stub(
+    name = "macos-aarch64",
+    arch = "aarch64",
+    os = "macos",
+)

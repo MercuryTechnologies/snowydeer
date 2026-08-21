@@ -91,4 +91,5 @@ extra_substituters = https://cache.oss.mercury.com
 extra_trusted_public_keys = cache.oss.mercury.com-1:COfsgEgHMrBhMvGoLWuNH5RDgub3/MT32n8kK50m2dc=
 
 [build]
-execution_platforms = prelude//platforms:default
+# Not prelude//platforms:default: that one can't enable persistent workers.
+execution_platforms = root//platforms:default

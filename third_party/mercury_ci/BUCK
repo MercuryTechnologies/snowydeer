@@ -2,13 +2,58 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
+load(":ci_script.bzl", "ci_script")
+
+# This one-file target avoids a cycle: :mercury_ci depends on the telemetry
+# target, while telemetry imports mercury_ci.env. Move shared configuration
+# helpers to a better package once we have a structure for those.
+python_library(
+    name = "env",
+    srcs = ["env.py"],
+    base_module = "mercury_ci",
+    typing = True,
+    visibility = ["PUBLIC"],
+)
+
 python_library(
     name = "mercury_ci",
     srcs = glob(
-        ["*.py"],
-        exclude = ["test_*.py"],
+        [
+            "*.py",
+            "btd_ci/*.py",
+        ],
+        exclude = [
+            "btd_ci.py",
+            "env.py",
+            "test_*.py",
+        ],
     ),
     base_module = "mercury_ci",
     typing = True,
     visibility = ["PUBLIC"],
+    deps = [
+        "//third_party/mercury_ci/telemetry",
+        "//third_party/python:opentelemetry-api",
+    ],
+)
+
+ci_script(
+    name = "btd_ci",
+    args = [
+        "plan",
+        "--btd",
+        "$(exe toolchains//:btd)",
+        "--targets",
+        "$(exe toolchains//:btd[targets])",
+    ],
+    main = "btd_ci.py",
+    deps = [":mercury_ci"],
+)
+
+# Keep the test runner independent of the planner tools.
+ci_script(
+    name = "btd_ci_test",
+    args = ["test"],
+    main = "btd_ci.py",
+    deps = [":mercury_ci"],
 )

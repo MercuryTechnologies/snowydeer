@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Mercury Technologies, Inc.
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+stub(
+    name = "leaf",
+    srcs = ["input.txt"],
+)

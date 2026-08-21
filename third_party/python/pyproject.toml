@@ -25,4 +25,11 @@ dependencies = [
   "moto[server,s3]",
   "expecttest",
   "hypothesis",
+  "opentelemetry-api",
+  "opentelemetry-exporter-otlp-proto-http",
+  "opentelemetry-sdk",
+  "opentelemetry-semantic-conventions",
+  "grpcio",
+  "grpcio-tools",
+  "protobuf",
 ]

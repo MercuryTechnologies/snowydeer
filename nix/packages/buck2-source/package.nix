@@ -6,13 +6,11 @@
 # Nix expression to build Buck2 from source.
 # Based, in part, on https://github.com/thoughtpolice/buck2-nix/blob/c602d0f44f03310a89f209a322bb122b0d3c557a/buck/nix/buck2/default.nix
 #
-# To update Buck2:
-# - change the `gitRev`, `srcHash` and `toolchainHash` attributes in
-#   `currentArgs` below.
-# - copy a fresh `Cargo.lock` from Buck2 and refresh `cargoLock.outputHashes`.
+# To update Buck2, run `./update.py` in this directory; it rewrites
+# `versions.json` and the lock files from the tips of the upstream branches.
 #
-# `buildBuck2` is parameterised over exactly those inputs so that we can build
-# more than one Buck2 out of this file; see `nextArgs` below.
+# `buildBuck2` is parameterised over the per-version inputs so that we can build
+# more than one Buck2 out of this file; see `versions.json`.
 {
   lib,
   fetchFromGitHub,
@@ -30,95 +28,46 @@
   watchman,
 }:
 let
-  # The Buck2 everyone gets as `pkgs.buck2-source`.
-  currentArgs = {
-    gitRev = "780ef1343928ea055b45ef8b03db9d834b84f60f";
-    srcHash = "sha256-yAxegt5hKRFi6twj+75HmUFzhNFJXxByS2nRvEjQUzs=";
-    toolchainHash = "sha256-KyNTI/ZRO/v6w+nJTxj8JjRMX4EmViw2pCTbRKYyILo=";
+  # Pins for both Buck2s, written by `./update.py`: git revision, source hash,
+  # Rust toolchain manifest hash and the `outputHashes` for the lock file's git
+  # dependencies.
+  #
+  # Each version gets its own lock file, toolchain hash, etc, since they pretty
+  # much always change.
+  versions = lib.importJSON ./versions.json;
 
-    # scuffed fix to unused patched dependencies. we could (and have later)
-    # fixed them in git.
-    prePatch = ''
-      sed -Ei -e '\#tonic-health = \{ git = "https://github.com/edef1c/tonic.git"#d' \
-        -e '\#tonic-reflection = \{ git = "https://github.com/edef1c/tonic.git"#d' \
-        Cargo.toml
-    '';
+  # Turn one entry of `versions.json` into `buildBuck2` arguments.
+  #
+  # The lock file lives beside the pins rather than inside them because Nix
+  # needs a literal path here; `update.py` knows the same mapping.
+  argsFor = lockFile: version: {
+    inherit (version) gitRev srcHash toolchainHash;
 
     cargoLock = {
-      lockFile = ./Cargo.lock;
-      outputHashes = {
-        "hyper-1.9.0" = "sha256-XnUOQYfPa+LKOx7aKz5wv4tL9hXirJ7UkrMBiM7bHb4=";
-        "opentelemetry-0.32.0" = "sha256-Lt4FkCsx7RFWYtBYzVqfwGfITB8PRc2FSrdYKSmEol8=";
-        "opentelemetry-http-0.32.0" = "sha256-Lt4FkCsx7RFWYtBYzVqfwGfITB8PRc2FSrdYKSmEol8=";
-        "opentelemetry-otlp-0.32.0" = "sha256-Lt4FkCsx7RFWYtBYzVqfwGfITB8PRc2FSrdYKSmEol8=";
-        "opentelemetry-proto-0.32.0" = "sha256-Lt4FkCsx7RFWYtBYzVqfwGfITB8PRc2FSrdYKSmEol8=";
-        "opentelemetry-semantic-conventions-0.32.1" = "sha256-Lt4FkCsx7RFWYtBYzVqfwGfITB8PRc2FSrdYKSmEol8=";
-        "opentelemetry_sdk-0.32.1" = "sha256-Lt4FkCsx7RFWYtBYzVqfwGfITB8PRc2FSrdYKSmEol8=";
-        "perf-event-0.4.8" = "sha256-Mvfp41Q9g9Z9xgdzFEdIdH/96YeCxrrSl2Vsm6geGMQ=";
-        "perf-event-open-sys-5.0.0" = "sha256-Mvfp41Q9g9Z9xgdzFEdIdH/96YeCxrrSl2Vsm6geGMQ=";
-        "probminhash-0.1.12" = "sha256-8IzGV6QDvyBPavICUB4j/VABBkplGa+sSsIz1OD35ik=";
-        "sorted_vector_map-0.2.0" = "sha256-+6uh2hNKE7gHl756rtkpd6U2RDsQKLo2RVJ2OFqloVg=";
-        "tonic-0.14.5" = "sha256-bf88XZMzeplglunUDOU5XWFgKpbzoVV1r4Sj3qvhOHQ=";
-        "tonic-build-0.14.5" = "sha256-bf88XZMzeplglunUDOU5XWFgKpbzoVV1r4Sj3qvhOHQ=";
-        "tonic-prost-0.14.5" = "sha256-bf88XZMzeplglunUDOU5XWFgKpbzoVV1r4Sj3qvhOHQ=";
-        "tonic-prost-build-0.14.5" = "sha256-bf88XZMzeplglunUDOU5XWFgKpbzoVV1r4Sj3qvhOHQ=";
+      # Both lock files are called `Cargo.lock` in the store so that renaming
+      # a slot's file doesn't rebuild it.
+      lockFile = builtins.path {
+        name = "Cargo.lock";
+        path = lockFile;
       };
+
+      # We give these hashes explicitly to speed up Nix evaluation (allowBuiltinFetchGit blocks evaluation on git fetch!).
+      inherit (version) outputHashes;
     };
   };
+
+  # The Buck2 everyone gets as `pkgs.buck2-source`.
+  currentArgs = argsFor ./Cargo.lock versions.current;
 
   # Staging ground for the next Buck2, exposed as `buck2-source.passthru.next`
   # so it can be built and cached without changing what anyone gets by default.
   #
   # You can use this from any dev shell like:
-  # `nix develop -f shell.nix exclude.all.passthru.buck2-next`
+  #     nix develop -f shell.nix exclude.all.passthru.buck2-next
   #
-  # Each version gets its own lock file, toolchain hash, etc, since they pretty
-  # much always change.
-  nextArgs = {
-    # See: https://github.com/MercuryTechnologies/buck2/commits/mercury-head
-    gitRev = "fe235292a4bf27274b48520528ea748284a6a53f";
-    srcHash = "sha256-4hlhru9BHXOfOp5uyR9s3i/jnqTn23Vrxygmez4DVy4=";
-    toolchainHash = "sha256-kEslngyDh0HeelBSXJ/DWdEjMsce4jatUcB1mNtlRMA=";
-
-    cargoLock = {
-      lockFile = builtins.path {
-        name = "Cargo.lock";
-        path = ./Cargo.lock.next;
-      };
-
-      # We give these hashes explicitly to speed up Nix evaluation (allowBuiltinFetchGit blocks evaluation on git fetch!).
-      # Get this stanza from `buck run nix//tools/nix-prefetch-cargo -- nix/packages/buck2-source/Cargo.lock`
-      outputHashes = {
-        "filedescriptor-0.8.3" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-        "finl_unicode-1.3.0" = "sha256-38S6XH4hldbkb6NP+s7lXa/NR49PI0w3KYqd+jPHND0=";
-        "hyper-1.10.1" = "sha256-5Jwxx+cafnawCBV+6VS461uL2TGht8k6xPBf2tAhcO0=";
-        "opentelemetry-0.32.0" = "sha256-Lt4FkCsx7RFWYtBYzVqfwGfITB8PRc2FSrdYKSmEol8=";
-        "opentelemetry-http-0.32.0" = "sha256-Lt4FkCsx7RFWYtBYzVqfwGfITB8PRc2FSrdYKSmEol8=";
-        "opentelemetry-otlp-0.32.0" = "sha256-Lt4FkCsx7RFWYtBYzVqfwGfITB8PRc2FSrdYKSmEol8=";
-        "opentelemetry-proto-0.32.0" = "sha256-Lt4FkCsx7RFWYtBYzVqfwGfITB8PRc2FSrdYKSmEol8=";
-        "opentelemetry-semantic-conventions-0.32.1" = "sha256-Lt4FkCsx7RFWYtBYzVqfwGfITB8PRc2FSrdYKSmEol8=";
-        "opentelemetry_sdk-0.32.1" = "sha256-Lt4FkCsx7RFWYtBYzVqfwGfITB8PRc2FSrdYKSmEol8=";
-        "perf-event-0.4.8" = "sha256-Mvfp41Q9g9Z9xgdzFEdIdH/96YeCxrrSl2Vsm6geGMQ=";
-        "perf-event-open-sys-5.0.0" = "sha256-Mvfp41Q9g9Z9xgdzFEdIdH/96YeCxrrSl2Vsm6geGMQ=";
-        "termwiz-0.24.0" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-        "tonic-0.14.6" = "sha256-yzev8mwMhJS3iSAsyCC6TH7kSDcRLNghDdFijAuI6Ws=";
-        "tonic-build-0.14.6" = "sha256-yzev8mwMhJS3iSAsyCC6TH7kSDcRLNghDdFijAuI6Ws=";
-        "tonic-prost-0.14.6" = "sha256-yzev8mwMhJS3iSAsyCC6TH7kSDcRLNghDdFijAuI6Ws=";
-        "tonic-prost-build-0.14.6" = "sha256-yzev8mwMhJS3iSAsyCC6TH7kSDcRLNghDdFijAuI6Ws=";
-        "vtparse-0.7.0" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-        "wezterm-bidi-0.2.3" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-        "wezterm-blob-leases-0.1.1" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-        "wezterm-cell-0.1.0" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-        "wezterm-char-props-0.1.3" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-        "wezterm-color-types-0.3.0" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-        "wezterm-dynamic-0.2.1" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-        "wezterm-dynamic-derive-0.1.1" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-        "wezterm-escape-parser-0.1.0" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-        "wezterm-input-types-0.1.0" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-        "wezterm-surface-0.1.0" = "sha256-V6WvkNZryYofarsyfcmsuvtpNJ/c3O+DmOKNvoYPbmA=";
-      };
-    };
-  };
+  # Or from your `.envrc.local` like:
+  #     export MWB_SHELL_FLAKE_ATTR=exclude.all.passthru.buck2-next
+  nextArgs = argsFor ./Cargo.lock.next versions.next;
 
   # Build one Buck2 from a given source revision, Rust toolchain and lockfile.
   #
@@ -157,6 +106,12 @@ let
       unwrapped = rustPlatform.buildRustPackage {
         inherit pname src cargoLock;
         version = "git-${gitRev}";
+
+        # This revision enables `starlark/pagable`, which makes `cargo-auditable`'s
+        # `cargo metadata` call blow up on `starlark_map`.
+        #
+        # I think this might be blocked on https://linear.app/mercury/issue/DUX-3850/update-nixpkgs-2025-q3
+        auditable = false;
 
         # Please avoid patching here - make one to mwb's repository and update off of mercury-head at https://github.com/MercuryTechnologies/buck2
         # See the README at https://github.com/MercuryTechnologies/buck2/

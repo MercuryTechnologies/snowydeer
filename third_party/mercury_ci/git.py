@@ -2,12 +2,14 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-"""Robust parsing of `git status` for CI diff checks."""
+"""Robust `git` wrappers and models."""
 
 import os
 from dataclasses import dataclass
 from pathlib import Path
 import enum
+import re
+import dataclasses
 
 from mercury_ci.actions import AbstractCiActions
 
@@ -138,3 +140,17 @@ class Git:
         for entry in self.status(untracked_files):
             paths.extend(entry.affected_paths)
         return paths
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class GitObjectId:
+    """A validated hexadecimal Git object ID."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"[0-9a-fA-F]{7,64}", self.value):
+            raise ValueError(f"not a Git object ID: {self.value!r}")
+
+    def __str__(self) -> str:
+        return self.value

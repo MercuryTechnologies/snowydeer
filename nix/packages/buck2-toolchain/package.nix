@@ -15,6 +15,7 @@
 
   # keep-sorted start
   bash,
+  buck2-change-detector,
   buck2-source,
   buck2-support,
   buildifier,
@@ -102,11 +103,21 @@ in
     exec "$BASH" "$@"
   '';
 
-  python = python3;
+  # FIXME(jadel): we have to use nix's grpcio here to avoid hacks for libcxx
+  # with elk:
+  # https://github.com/cormacrelf/elk/issues/6
+  # grpcio (which brings protobuf): nix_realiser_worker needs it to serve the
+  # buck2 worker protocol.
+  python = python3.withPackages (ps: with ps; [ grpcio ]);
+
+  libstdcxx = lib.getLib stdenv.cc.cc;
+
   inherit
     # keep-sorted start
+    buck2-change-detector
     buck2-source # just so it gets uploaded to cache
     buildifier
+    git
     nix-prefetch-docker
     podman
     protobuf
